@@ -1,0 +1,68 @@
+# ASP Surface Registry
+# SSOT for surface → repo/branch/team mapping within ASP project.
+# Mirrors rootgrove contexts/team_registry.yaml ASP section.
+# When updating, keep both in sync.
+
+surfaces:
+  backend:
+    repo: AI-MYG/asp-backend
+    base_branch: dev
+    local_path: projects/asp/backend
+    team_lead: marvin
+    default_reviewers:
+      - "369795172"
+    tech_stack: [Python, FastAPI, PostgreSQL]
+    deploy_target: CVM-1 Docker
+
+  app:
+    repo: AI-MYG/asp-app
+    base_branch: main
+    local_path: projects/asp/app
+    team_lead: hujianfei
+    default_reviewers:
+      - "1401554949"
+    tech_stack: [Flutter, Dart]
+    deploy_target: App Store / APK
+
+  admin:
+    repo: AI-MYG/asp-admin
+    base_branch: main
+    local_path: projects/asp/admin
+    team_lead: hujianfei
+    default_reviewers:
+      - "1401554949"
+    tech_stack: [Vue, JavaScript]
+    deploy_target: CVM-1 Nginx
+
+  wecom:
+    repo: AI-MYG/asp-wecom
+    base_branch: main
+    local_path: projects/asp/wecom
+    team_lead: marvin
+    default_reviewers:
+      - "369795172"
+    tech_stack: [JavaScript, WeCom SDK]
+    deploy_target: CVM-1
+
+  websites:
+    repo: AI-MYG/asp-websites
+    base_branch: main
+    local_path: projects/asp/websites
+    team_lead: marvin
+    default_reviewers:
+      - "369795172"
+    tech_stack: [HTML, CSS, JavaScript]
+    deploy_target: COS + CVM
+
+  canonical:
+    repo: AI-MYG/asp-canonical
+    base_branch: main
+    local_path: projects/asp/canonical
+    team_lead: marvin
+    default_reviewers:
+      - "369795172"
+    tech_stack: [Markdown, YAML]
+    deploy_target: none
+
+# Branch naming convention
+branch_pattern: "issue-{issue_number}/{surface}"

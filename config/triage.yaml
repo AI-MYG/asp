@@ -1,0 +1,66 @@
+# ASP Triage Routing Configuration
+# Used by comprehensive Agent to route inbound requirements to surface repos.
+# Extracted from rootgrove tools/feishu_inbound/config.yaml.
+
+# --- Surface Routing ---
+# Keywords in requirement title/description → surface
+surface_routing:
+  backend:
+    keywords: ["后端", "API", "接口", "数据库", "服务端", "backend", "endpoint", "migration", "COS", "媒体"]
+    label: "backend"
+  admin:
+    keywords: ["管理端", "管理后台", "admin", "后台管理", "运营端"]
+    label: "admin"
+  app:
+    keywords: ["APP", "Flutter", "移动端", "客户端", "app端", "安卓", "iOS", "儿童端", "播放", "投屏", "音频", "视频", "画面", "动画", "界面", "页面", "弹窗", "按钮", "点击", "滑动", "触摸"]
+    label: "app"
+  websites:
+    keywords: ["官网", "landing", "website", "落地页", "静态页"]
+    label: "websites"
+  wecom:
+    keywords: ["企微", "企业微信", "wecom", "侧边栏"]
+    label: "wecom"
+
+# --- Assignee Routing ---
+# surface → GitHub user ID for auto-assignment
+assignee_routing:
+  backend: "369795172"      # Marvin
+  wecom: "369795172"        # Marvin
+  websites: "369795172"     # Marvin
+  app: "1401554949"         # 胡剑飞
+  admin: "1401554949"       # 胡剑飞
+  cross_surface_default: "369795172"  # Marvin handles cross-surface
+
+# --- Difficulty Estimation ---
+scope_heuristics:
+  small:
+    max_surfaces: 1
+    keywords: ["修复", "fix", "调整", "补充", "小改"]
+    estimate: "< 2h"
+  medium:
+    max_surfaces: 2
+    keywords: ["新增", "优化", "重构", "feature"]
+    estimate: "2h - 1d"
+  large:
+    min_surfaces: 3
+    keywords: ["重构", "架构", "迁移", "全量"]
+    estimate: "> 1d"
+
+# --- Issue Templates ---
+central_issue_labels:
+  - "feishu-inbound"
+
+execution_issue_body_template: |
+  ## Execution Issue
+
+  **Central Issue**: AI-MYG/asp#{central_issue_number}
+  **Surface**: {surface}
+  **Difficulty**: {difficulty}
+  **Triage Summary**: {triage_summary}
+
+  ---
+
+  {original_description}
+
+  ---
+  _Auto-created by ASP triage agent from central issue._

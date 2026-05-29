@@ -1,0 +1,59 @@
+# ASP Notification Configuration
+# Templates and routing for Feishu notifications.
+
+# --- Webhook ---
+# Actual URL in .env (FEISHU_WEBHOOK_URL), this file only defines templates.
+
+# --- Notification Events ---
+events:
+  requirement_triaged:
+    description: "需求已分诊，通知需求负责人"
+    template: |
+      **[ASP] 需求已分诊**
+      需求：{title}
+      Surface：{surface}
+      难度：{difficulty}
+      指派：{assignee}
+      中央 Issue：{central_issue_url}
+      执行 Issue：{execution_issue_url}
+
+  requirement_completed:
+    description: "需求已完成（PR 合并 + 部署），通知需求负责人"
+    template: |
+      **[ASP] 需求已完成**
+      需求：{title}
+      Surface：{surface}
+      PR：{pr_url}
+      中央 Issue：{central_issue_url}
+      完成时间：{completed_at}
+
+  pr_merged:
+    description: "PR 合并通知（内部）"
+    template: |
+      **[ASP] PR 已合并**
+      Repo：{repo}
+      PR：{pr_url}
+      作者：{author}
+      关联 Issue：{issue_url}
+
+  daily_digest:
+    description: "日频项目摘要（Observer 产出）"
+    template: |
+      **[ASP] 项目日报 {date}**
+      新增需求：{new_requirements}
+      已分诊：{triaged_count}
+      已完成：{completed_count}
+      活跃 PR：{active_prs}
+
+# --- Recipient Routing ---
+# Maps event → who should be notified
+recipient_routing:
+  requirement_triaged:
+    - role: requirement_author  # 从 Bitable 字段"需求负责人"解析
+  requirement_completed:
+    - role: requirement_author
+    - role: team_lead
+  pr_merged:
+    - role: team_lead
+  daily_digest:
+    - role: all_leads
