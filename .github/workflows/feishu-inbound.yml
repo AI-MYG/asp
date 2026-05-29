@@ -1,0 +1,164 @@
+name: Feishu Inbound Requirement
+
+on:
+  repository_dispatch:
+    types: [feishu-inbound-requirement]
+
+jobs:
+  create-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Create GitHub Issue and update Feishu Bitable
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_BASE_TOKEN: ${{ secrets.FEISHU_BASE_TOKEN }}
+          FEISHU_TABLE_ID: ${{ secrets.FEISHU_TABLE_ID }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, sys, textwrap, time
+          from typing import Any, Optional
+          import requests
+
+          BASE_URL = "https://open.feishu.cn/open-apis"
+
+          # --- Feishu Bitable Client ---
+
+          class FeishuBitableClient:
+              def __init__(self, app_id: str, app_secret: str):
+                  self._app_id = app_id
+                  self._app_secret = app_secret
+                  self._token: Optional[str] = None
+                  self._token_expires: float = 0
+
+              def _ensure_token(self) -> str:
+                  now = time.time()
+                  if self._token and now < self._token_expires:
+                      return self._token
+                  resp = requests.post(
+                      f"{BASE_URL}/auth/v3/tenant_access_token/internal",
+                      json={"app_id": self._app_id, "app_secret": self._app_secret},
+                      timeout=15,
+                  )
+                  resp.raise_for_status()
+                  data = resp.json()
+                  if data.get("code") != 0:
+                      raise RuntimeError(f"Token error: {data}")
+                  self._token = data["tenant_access_token"]
+                  self._token_expires = now + data.get("expire", 7200) - 300
+                  return self._token
+
+              def _headers(self) -> dict:
+                  return {"Authorization": f"Bearer {self._ensure_token()}"}
+
+              def update_record(self, base_token, table_id, record_id, fields):
+                  url = f"{BASE_URL}/bitable/v1/apps/{base_token}/tables/{table_id}/records/{record_id}"
+                  resp = requests.put(
+                      url, headers=self._headers(), json={"fields": fields}, timeout=30,
+                  )
+                  resp.raise_for_status()
+                  data = resp.json()
+                  if data.get("code") != 0:
+                      raise RuntimeError(f"Update error: {data}")
+                  return data["data"]["record"]
+
+          # --- Parse dispatch payload ---
+
+          event_path = os.environ.get("GITHUB_EVENT_PATH", "")
+          if event_path:
+              with open(event_path) as f:
+                  event = json.load(f)
+              payload = event.get("client_payload", {})
+          else:
+              print("No event file found, exiting.")
+              sys.exit(0)
+
+          title = payload.get("title", "").strip()
+          if not title:
+              print("Empty title in payload, skipping issue creation.")
+              sys.exit(0)
+
+          description = payload.get("description", "")
+          author = payload.get("author", "unknown")
+          priority = payload.get("priority", "")
+          req_type = payload.get("requirement_type", "")
+          record_id = payload.get("record_id", "")
+          feature_id = payload.get("feature_id", "")
+
+          # --- Create GitHub Issue in central repo ---
+
+          repo = os.environ["GITHUB_REPOSITORY"]  # AI-MYG/asp
+          issue_title = f"[feishu] {title}"
+
+          issue_body = textwrap.dedent(f"""\
+          ## Feishu Inbound Requirement
+
+          **Source**: Feishu Bitable (record: `{record_id}`)
+          **Feature ID**: `{feature_id}`
+          **Author**: {author}
+          **Priority**: {priority}
+          **Type**: {req_type}
+
+          ---
+
+          {description}
+
+          ---
+          _Auto-created by feishu-inbound pipeline (Pipeline A). Pending agent triage._
+          """)
+
+          resp = requests.post(
+              f"https://api.github.com/repos/{repo}/issues",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+              },
+              json={
+                  "title": issue_title,
+                  "body": issue_body,
+                  "labels": ["feishu-inbound"],
+              },
+              timeout=30,
+          )
+          resp.raise_for_status()
+          issue = resp.json()
+          issue_number = issue["number"]
+          issue_url = issue["html_url"]
+          print(f"Created central issue #{issue_number}: {issue_url}")
+
+          # --- Update Feishu Bitable record ---
+
+          if record_id:
+              feishu_app_id = os.environ.get("FEISHU_APP_ID", "")
+              feishu_app_secret = os.environ.get("FEISHU_APP_SECRET", "")
+              feishu_base_token = os.environ.get("FEISHU_BASE_TOKEN", "")
+              feishu_table_id = os.environ.get("FEISHU_TABLE_ID", "")
+
+              if all([feishu_app_id, feishu_app_secret, feishu_base_token, feishu_table_id]):
+                  try:
+                      feishu = FeishuBitableClient(feishu_app_id, feishu_app_secret)
+                      feishu.update_record(
+                          feishu_base_token,
+                          feishu_table_id,
+                          record_id,
+                          {
+                              "GitHub Issue": {"text": issue_url, "link": issue_url},
+                              "需求状态": "已派发",
+                          },
+                      )
+                      print(f"Updated Bitable record {record_id} with central issue #{issue_number}")
+                  except Exception as e:
+                      print(f"Warning: Bitable update failed (non-fatal): {e}")
+              else:
+                  print("Feishu credentials incomplete, skipping Bitable update.")
+          else:
+              print("No record_id in payload, skipping Bitable update.")
+          PYEOF
