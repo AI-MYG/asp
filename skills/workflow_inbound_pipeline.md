@@ -38,6 +38,7 @@ GitHub Issue            Surface 路由                   Deep Analysis
 2. 按 `workflow_triage_routing.md` 分诊
 3. 各 surface repo 创建执行 issue + 指派 Team Lead
 
+执行脚本：`scripts/triage_dispatch.py`
 launchd 调度：每 30 分钟（:10/:40）扫描。
 
 ## Pipeline C: Analysis + Delivery
@@ -47,13 +48,17 @@ launchd 调度：每 30 分钟（:10/:40）扫描。
 1. 扫描被指派的执行 issue
 2. 拉取对应 surface repo 代码上下文
 3. 生成 debug analysis comment（格式见 `contract_debug_analysis.md`）
-4. 实现 + Smart PR（rootgrove `tools/smart_pr.py`）
+4. 实现 + Smart PR（`tools/smart_pr.py`）
 5. Review → Merge → Deploy
 6. 执行 `workflow_post_implement.md` 收尾
-7. 飞书通知需求方（`config/notifications.yaml` → `requirement_completed`）
+7. 飞书通知需求方（`scripts/completion_notify.py` + `config/notifications.yaml`）
 
-## 与 rootgrove 的衔接
+## 工具清单
 
-- Pipeline A/B 的脚本在 rootgrove `tools/feishu_inbound/` 和 `periodic_jobs/ai_heartbeat/`
-- 本 repo 提供配置（`config/`）和 skill 定义（`skills/`）
-- Step 6 migration（将 Pipeline A 目标从 asp-backend 改为 asp）计划在下一轮 session 执行
+| 工具 | 位置 | 用途 |
+|------|------|------|
+| GitHub Actions | `.github/workflows/feishu-inbound.yml` | Pipeline A |
+| 分诊脚本 | `scripts/triage_dispatch.py` | Pipeline B |
+| Smart PR | `tools/smart_pr.py` | Pipeline C PR 创建 |
+| 通知脚本 | `scripts/completion_notify.py` | Pipeline C 尾段 |
+| OpenCode 客户端 | `tools/opencode_client.py` | Agent API 调用 |

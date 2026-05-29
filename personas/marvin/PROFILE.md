@@ -1,11 +1,5 @@
 # Marvin — ASP Project Persona
 
-## Source
-
-- **来源**: rootgrove `rules/USER.md` + `rules/axioms/INDEX.md`
-- **同步日期**: 2026-05-29
-- **公理数量**: 15 (ASP 决策相关子集)
-
 ## 角色
 
 CTO，后端/架构决策者，产品技术负责人。负责 backend, wecom, websites, canonical 四个 surface。

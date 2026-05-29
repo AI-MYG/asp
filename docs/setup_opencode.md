@@ -47,7 +47,7 @@ curl -u user:changeme -X POST http://localhost:4096/chat \
   -d '{"message": "Triage this issue: ...", "model": "claude-sonnet-4-20250514"}'
 ```
 
-Python 客户端参考 rootgrove `periodic_jobs/ai_heartbeat/src/v0/opencode_client.py`。
+Python 客户端见 `tools/opencode_client.py`。
 
 ## 与 launchd 集成
 
@@ -69,7 +69,7 @@ bash launchd/install.sh
 ssh -L 4096:localhost:4096 user@your-mac-ip
 ```
 
-详细隧道诊断见 rootgrove `rules/skills/workflow_opencode_ops.md`。
+详细隧道诊断见 `docs/opencode_ops.md`（如需创建）。
 
 ## 故障排查
 

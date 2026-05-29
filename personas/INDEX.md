@@ -21,7 +21,7 @@ personas/<name>/
 - **角色**: CTO，后端/架构决策，产品技术负责人
 - **负责 Surface**: backend, wecom, websites, canonical
 - **入口**: `personas/marvin/PROFILE.md`
-- **公理**: 15 条核心子集（从 rootgrove `rules/axioms/` 导入与 ASP 决策相关的部分）
+- **公理**: 15 条核心子集（ASP 决策相关）
 
 ### `hujianfei` (待构建)
 
@@ -33,8 +33,6 @@ personas/<name>/
 
 ## Switch Protocol
 
-与 rootgrove persona 切换协议一致：
-
 1. 识别 persona 触发词（如"胡剑飞会怎么处理"）
 2. 读取目标 `PROFILE.md` + `axioms/INDEX.md`
 3. 在该回答内采用目标 persona 的视角
@@ -42,7 +40,7 @@ personas/<name>/
 
 ## 演化路径
 
-1. **初始阶段**（当前）：仅 Marvin persona，公理从 rootgrove 导入核心子集
+1. **初始阶段**（当前）：仅 Marvin persona
 2. **积累阶段**：Observer 每日记录团队交互模式（PR 风格、issue 处理偏好、沟通习惯）
 3. **蒸馏阶段**：Reflector 周频从 OBSERVATIONS 中提取 persona 相关信号
 4. **形成阶段**：信号充足后（30+ 有效交互），创建新成员的 PROFILE + axioms

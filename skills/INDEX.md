@@ -2,14 +2,12 @@
 
 ASP 项目级 skill，专注于需求闭环（分诊 → 分析 → PR → 部署 → 通知）。
 
-通用工具链 skill（Smart PR、Parallel Subagents 等）继续使用 rootgrove `rules/skills/`。
-
 ## Workflow
 
 - [Triage Routing](./workflow_triage_routing.md) — 综合 Agent 分诊：中央 issue → surface 判定 + difficulty + assignee → 各 repo 创建执行 issue
 - [Inbound Pipeline](./workflow_inbound_pipeline.md) — 飞书入站全流程（Bitable → 中央 issue → 分诊 → 执行 issue → 分析 → PR → 部署 → 通知）
 - [Post Implement](./workflow_post_implement.md) — issue 完成收尾（PR 合入 + 飞书通知 + 中央 issue 关闭）
-- [Smart PR](./workflow_smart_pr.md) — Smart PR 在 ASP 多 repo 下的约定（引用 rootgrove 工具）
+- [Smart PR](./workflow_smart_pr.md) — Smart PR 在 ASP 多 repo 下的约定（`tools/smart_pr.py`）
 
 ## Contract
 

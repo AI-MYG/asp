@@ -1,14 +1,6 @@
 # Marvin ASP Axioms (核心子集)
 
-从 rootgrove `rules/axioms/` 导入与 ASP 项目决策最相关的 15 条公理。
-
-完整 35 条公理体系见 rootgrove `rules/axioms/INDEX.md`。
-
-## Source
-
-- **来源仓库**: rootgrove `rules/axioms/`
-- **同步日期**: 2026-05-29
-- **选择标准**: 与 ASP 产品开发、团队协作、架构决策直接相关
+ASP 项目决策最相关的 15 条公理。这些公理是 Marvin 从个人经历中提炼的认知滤镜，指导 ASP 项目的架构、协作和产品决策。
 
 ## AI 协作 (4 条)
 

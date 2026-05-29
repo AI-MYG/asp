@@ -1,6 +1,5 @@
 # ASP Triage Routing Configuration
 # Used by comprehensive Agent to route inbound requirements to surface repos.
-# Extracted from rootgrove tools/feishu_inbound/config.yaml.
 
 # --- Surface Routing ---
 # Keywords in requirement title/description → surface

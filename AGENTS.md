@@ -8,6 +8,7 @@
 2. **项目记忆**：Observer（日频）+ Reflector（周频）持续积累项目洞察
 3. **团队 Persona**：逐步为每个团队成员构建认知画像，提升分诊精准度
 4. **项目级 Skill**：ASP 专有的分诊、收尾、通知等执行流程
+5. **自动化工具**：Smart PR、OpenCode 客户端等，团队成员 clone 即可使用
 
 ## Surface 约定
 
@@ -22,7 +23,7 @@
 | websites | AI-MYG/asp-websites | main | projects/asp/websites |
 | canonical | AI-MYG/asp-canonical | main | projects/asp/canonical |
 
-分支命名：`issue-{N}/{surface}`，与 rootgrove `team_registry.yaml` 保持一致。
+分支命名：`issue-{N}/{surface}`，SSOT 在 `config/surfaces.yaml`。
 
 ## 分诊协议
 
@@ -37,7 +38,7 @@
 
 ## 执行约定
 
-- Smart PR：各 surface repo 的 PR 使用 rootgrove `tools/smart_pr.py`，读取 `team_registry.yaml` 做分支/reviewer 路由
+- Smart PR：`tools/smart_pr.py`，读取 `config/surfaces.yaml` 做分支/reviewer 路由
 - Issue 收尾：执行完成后走 `skills/workflow_post_implement.md`（PR 合入 + 飞书通知）
 - Debug 分析：`skills/contract_debug_analysis.md` 定义分析 comment 的输出格式
 
@@ -55,10 +56,15 @@ Observer 扫描范围：`AI-MYG/asp*` 所有 repo 的 issue/PR/commit 活动。
 
 切换协议：参照 `personas/INDEX.md`。
 
+## Tools
+
+- `tools/smart_pr.py`：读取 `config/surfaces.yaml`，自动创建 PR 并指派 reviewer
+- `tools/opencode_client.py`：OpenCode Server HTTP REST 客户端，供自动化脚本调用
+
 ## Secrets
 
 环境变量存 `.env`（gitignored），模板见 `.env.example`。生产凭证通过 macOS Keychain 或 CI secrets 注入。
 
 ## Python
 
-本 repo 脚本使用系统 Python 3 或项目级 venv（若后续需要）。rootgrove 侧工具继续使用 rootgrove 的 `./venv/bin/python`。
+本 repo 脚本使用系统 Python 3。依赖：`pip install pyyaml requests`。

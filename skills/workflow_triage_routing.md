@@ -60,6 +60,6 @@ Triage comment 格式见 `contract_triage_comment.md`。
 
 ## Guardrails
 
-- Agent 自主完成分诊，不打断用户（参考 rootgrove feedback: pipeline gate 自主决策）
+- Agent 自主完成分诊，不打断用户（pipeline gate 自主决策）
 - 无法判定 surface 时标记 `needs-manual-triage`，不猜测
 - assignee 从 `config/triage.yaml` 读取，不硬编码

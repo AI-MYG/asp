@@ -21,7 +21,7 @@
 | Pipeline A | 飞书 Bitable 自动化 → 本 repo 创建中央 Issue |
 | Pipeline B | 综合 Agent 读取中央 Issue → 分诊 → 各 surface repo 创建执行 Issue |
 | Pipeline C | 执行完成 → 飞书通知需求方 |
-| Smart PR | rootgrove `tools/smart_pr.py`，基于 `team_registry.yaml` 自动路由分支和 reviewer |
+| Smart PR | `tools/smart_pr.py`，基于 `config/surfaces.yaml` 自动路由分支和 reviewer |
 
 ## 团队
 

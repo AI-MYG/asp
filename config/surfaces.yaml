@@ -1,7 +1,5 @@
 # ASP Surface Registry
 # SSOT for surface → repo/branch/team mapping within ASP project.
-# Mirrors rootgrove contexts/team_registry.yaml ASP section.
-# When updating, keep both in sync.
 
 surfaces:
   backend:
