@@ -1,0 +1,2 @@
+# State files are generated at runtime — do not commit.
+*.json

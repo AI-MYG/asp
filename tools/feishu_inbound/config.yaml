@@ -1,0 +1,87 @@
+# Feishu Inbound Requirement Pipeline Configuration — AI-MYG/asp
+# Pipeline A: feishu-inbound.yml — Bitable → Issue (cloud)
+# Pipeline B: triage_agent.py — routing + difficulty + triaged + assignee (central Mac)
+# Pipeline C: issue_scanner.py — per-developer difficulty-aware analysis (local Mac)
+
+central_triage:
+  host_note: "Marvin MacBook — director machine (B :10/:40 + local C :20/:50)"
+  launchd_label: com.asp.feishu-inbound-triage
+
+# --- GitHub Target ---
+github:
+  repo: "AI-MYG/asp"
+  issue_title_prefix: "[feishu]"
+  default_labels:
+    - "feishu-inbound"
+  processed_label: "triaged"
+
+# --- Feishu Bitable Field Mapping (Inbound: Bitable → GitHub) ---
+bitable_fields:
+  title: "反馈问题"
+  description: "用户故事"
+  author: "需求负责人"
+  priority: "优先级"
+  requirement_type: "需求类型"
+  feature_id: "Feature ID"
+  writeback:
+    issue_link: "GitHub Issue"
+    status: "需求状态"
+    status_value: "已派发"
+
+# --- Surface Routing (Layer 2) ---
+surface_routing:
+  backend:
+    keywords: ["后端", "API", "接口", "数据库", "服务端", "backend", "endpoint", "migration"]
+    label: "backend"
+  admin:
+    keywords: ["管理端", "管理后台", "admin", "后台管理", "运营端"]
+    label: "admin"
+  app:
+    keywords: ["APP", "Flutter", "移动端", "客户端", "app端", "安卓", "iOS", "儿童端", "播放", "投屏", "音频", "视频", "画面", "动画", "界面", "页面", "弹窗", "按钮", "点击", "滑动", "触摸"]
+    label: "app"
+  websites:
+    keywords: ["官网", "landing", "website", "落地页", "静态页"]
+    label: "websites"
+  wecom:
+    keywords: ["企微", "企业微信", "wecom", "侧边栏"]
+    label: "wecom"
+
+# --- Assignee Routing (Layer 2A) ---
+# Maps surface → GitHub user ID for auto-assignment.
+# Must stay in sync with config/surfaces.yaml default_reviewers.
+assignee_routing:
+  backend: "369795172"
+  wecom: "369795172"
+  websites: "369795172"
+  app: "1401554949"
+  admin: "1401554949"
+  cross_surface_default: "369795172"
+
+# --- Scope Estimation (Layer 2) ---
+scope_heuristics:
+  small:
+    max_surfaces: 1
+    keywords: ["修复", "fix", "调整", "补充", "小改"]
+  medium:
+    max_surfaces: 2
+    keywords: ["新增", "优化", "重构", "feature"]
+  large:
+    min_surfaces: 3
+    keywords: ["重构", "架构", "迁移", "全量"]
+
+# --- Issue Body Template ---
+issue_body_template: |
+  ## Feishu Inbound Requirement
+
+  **Source**: Feishu Bitable (record: `{record_id}`)
+  **Feature ID**: `{feature_id}`
+  **Author**: {author}
+  **Priority**: {priority}
+  **Type**: {requirement_type}
+
+  ---
+
+  {description}
+
+  ---
+  _Auto-created by feishu-inbound pipeline. Pending inbound agent analysis._
