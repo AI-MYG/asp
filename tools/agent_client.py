@@ -19,7 +19,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ASP_ROOT = Path(__file__).resolve().parent.parent
+_WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE_ROOT", str(_ASP_ROOT.parent.parent)))
+
 
 
 @dataclass
@@ -55,7 +57,7 @@ def _run_opencode(
     """Execute via opencode_job.py subprocess. Returns (status, output, error)."""
     cmd = [
         sys.executable,
-        str(_REPO_ROOT / "tools" / "opencode_job.py"),
+        str(_WORKSPACE_ROOT / "tools" / "opencode_job.py"),
         prompt,
         "--title", "ASP-Agent",
         "--model", model,
@@ -69,11 +71,25 @@ def _run_opencode(
             cmd,
             capture_output=True,
             text=True,
-            cwd=str(_REPO_ROOT),
+            cwd=str(_WORKSPACE_ROOT),
             timeout=timeout_sec,
         )
         combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
         assistant_text = _extract_last_assistant_block(combined)
+
+        # DEBUG: dump raw output for diagnosis
+        _debug_path = _ASP_ROOT / "logs" / "agent_client_debug.log"
+        try:
+            _debug_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(_debug_path, "a", encoding="utf-8") as _df:
+                _df.write(f"\n{'='*60}\n")
+                _df.write(f"prompt_len={len(prompt)}\n")
+                _df.write(f"returncode={proc.returncode}\n")
+                _df.write(f"assistant_text_len={len(assistant_text) if assistant_text else 0}\n")
+                _df.write(f"--- assistant_text ---\n{assistant_text}\n")
+                _df.write(f"--- combined (first 5000) ---\n{combined[:5000]}\n")
+        except Exception:
+            pass
 
         if proc.returncode != 0 and not assistant_text:
             return "failed", combined[:4000], f"opencode_job exited with code {proc.returncode}"
@@ -104,7 +120,7 @@ class AgentClient:
         validate: Callable[[str], bool] | None = None,
     ) -> AgentRunResult:
         timeout = timeout_sec or int(os.getenv("AGENT_CLIENT_TIMEOUT", "3600"))
-        workdir_str = str(workdir) if workdir else str(_REPO_ROOT)
+        workdir_str = str(workdir) if workdir else str(_ASP_ROOT)
         use_model = model or self._model
 
         print(f"  Agent route: intent={intent} executor=opencode model={use_model}")
@@ -121,9 +137,15 @@ class AgentClient:
 
         if status == "success" and text:
             if validate and not validate(text) and finalize_prompt:
-                print(f"  Output validation failed, requesting finalize...")
+                print(f"  Output validation failed, requesting finalize (with prior output)...")
+                # Feed the first-round output back so model can reformat
+                reformat_prompt = (
+                    f"{finalize_prompt}\n\n"
+                    f"## 你上一轮的分析结果（需要重新格式化为 8 章节）\n\n"
+                    f"{text[:6000]}"
+                )
                 s2, t2, e2 = _run_opencode(
-                    finalize_prompt,
+                    reformat_prompt,
                     model=use_model,
                     agent=self._agent,
                     workdir=workdir_str,

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Pipeline B — Feishu inbound triage (centralized, runs on director machine)
+# Pipeline D — Auto-execute analyzed issues via worktree agents + Smart PR
 #
-# Scans AI-MYG/asp for open feishu-inbound issues, applies deterministic
-# routing (surface/scope/difficulty/assignee), posts triage comment.
+# Scans AI-MYG/asp-backend for open issues with 'analyzed' label,
+# spawns AgentClient to implement the plan, then creates Smart PR.
 #
-# Scheduled via launchd: com.asp.feishu-inbound-triage
-# Schedule: weekdays at :10 and :40 past each hour (9-18)
+# Scheduled via launchd: com.asp.issue-executor
+# Schedule: weekdays at :35 and :05 past each hour (9-18)
+#   (offset from Pipeline C by +15 min to ensure analysis is posted first)
 set -euo pipefail
 
 export TZ=Asia/Shanghai
 export PYTHONUNBUFFERED=1
+export PYTHONDONTWRITEBYTECODE=1
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,4 +53,4 @@ if ! host -W 3 api.github.com >/dev/null 2>&1 && \
   exit 0
 fi
 
-exec "$VENV_PYTHON" "$REPO_ROOT/tools/feishu_inbound/triage_agent.py"
+exec "$VENV_PYTHON" "$REPO_ROOT/tools/feishu_inbound/issue_executor.py" --batch 3 --parallel

@@ -55,7 +55,11 @@ from routing import (  # noqa: E402
 REPO = "AI-MYG/asp-backend"
 
 from inbound_agent import (  # noqa: E402
+    ISSUE_TYPE_DATA,
+    ISSUE_TYPE_FEATURE,
+    ISSUE_TYPE_OPERATIONAL,
     _load_env,
+    extract_issue_type,
     fetch_issue_comments,
     has_analysis_comment,
 )
@@ -284,6 +288,19 @@ def needs_execution(
     if not has_analysis_comment(comments):
         return "skip_no_analysis"
 
+    # Read issue type directly from Pipeline C's analysis comment (SSOT)
+    analysis_text = _extract_analysis_text(comments) or ""
+    issue_type = extract_issue_type(analysis_text)
+
+    if issue_type == ISSUE_TYPE_OPERATIONAL:
+        return "skip_operational"
+    if issue_type == ISSUE_TYPE_DATA and _APPROVED_LABEL not in labels:
+        return "skip_data_pending_approval"
+
+    number = issue.get("number")
+    if number and _has_linked_pr(number):
+        return "skip_has_pr"
+
     central_number = _extract_central_number(issue)
     difficulty = _get_difficulty(issue, central_number)
     if difficulty != "trivial" and _APPROVED_LABEL not in labels:
@@ -375,6 +392,25 @@ def _acquire_lock(number: int, dry_run: bool) -> bool:
 
 def _release_lock(number: int) -> None:
     _remove_label(number, _LOCK_LABEL)
+
+
+def _has_linked_pr(number: int) -> bool:
+    """Check if there's an open or merged PR for this issue (branch pattern issue-{N}/)."""
+    try:
+        raw = run_gh(
+            "pr", "list", "-R", REPO,
+            "--search", f"issue-{number}/",
+            "--state", "all",
+            "--json", "number,state,headRefName",
+        )
+        prs = json.loads(raw)
+        for pr in prs:
+            branch = pr.get("headRefName", "")
+            if branch.startswith(f"issue-{number}/"):
+                return True
+    except (RuntimeError, json.JSONDecodeError):
+        pass
+    return False
 
 
 # ---------------------------------------------------------------------------

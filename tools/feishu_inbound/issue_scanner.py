@@ -69,6 +69,7 @@ from inbound_agent import (  # noqa: E402
     _FINALIZE_PROMPT,
     _is_valid_analysis,
     _load_env,
+    extract_issue_type,
     fetch_issue_comments,
     format_comments_for_prompt,
     has_analysis_comment,
@@ -232,6 +233,9 @@ def analyze_issue(
     post_analysis_comment(number, routing_md, analysis_md, dry_run=dry_run)
     _add_analyzed_label(number, dry_run)
 
+    issue_type = extract_issue_type(analysis_md)
+    print(f"  Issue type: {issue_type} (from comment, Pipeline D reads this directly)")
+
     now_iso = datetime.now(timezone.utc).isoformat()
     return {
         "last_seen_at": now_iso,
@@ -244,6 +248,7 @@ def analyze_issue(
         "difficulty": difficulty,
         "routing_profile": routing_profile,
         "assignee": _operator(),
+        "issue_type": issue_type,
     }
 
 
