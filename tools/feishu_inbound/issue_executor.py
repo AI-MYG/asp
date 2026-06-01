@@ -62,6 +62,26 @@ def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
         finally:
             fcntl.flock(lf, fcntl.LOCK_UN)
 
+
+def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
+    """Atomic read-merge-write of a single issue key under exclusive lock.
+
+    Safe for parallel subprocesses: each only touches its own key.
+    """
+    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            state: dict[str, Any] = {}
+            if _STATE_FILE.exists():
+                with open(_STATE_FILE, encoding="utf-8") as f:
+                    state = json.load(f)
+            state[issue_key] = entry
+            with open(_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
 _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
 ).resolve()
@@ -945,7 +965,7 @@ def main() -> None:
                 skip_pr=args.skip_pr,
                 skip_fetch=args.skip_fetch,
             )
-            if entry:
+            if entry and entry.get("status") != "dry_run":
                 # Atomic per-key merge: safe even when called as parallel subprocess
                 _merge_state_entry(str(issue["number"]), entry)
                 processed += 1
