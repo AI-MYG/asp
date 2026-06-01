@@ -946,7 +946,7 @@ def main() -> None:
                 dry_run=args.dry_run,
                 skip_pr=args.skip_pr,
             )
-            if entry:
+            if entry and entry.get("status") != "dry_run":
                 # Atomic per-key merge: safe even when called as parallel subprocess
                 _merge_state_entry(str(issue["number"]), entry)
                 processed += 1
