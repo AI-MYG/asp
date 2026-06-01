@@ -68,6 +68,26 @@ def _write_state(state: dict[str, Any]) -> None:
         finally:
             fcntl.flock(lf, fcntl.LOCK_UN)
 
+
+def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
+    """Atomic read-merge-write of a single issue key under exclusive lock.
+
+    Safe for parallel subprocesses: each only touches its own key.
+    """
+    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            state: dict[str, Any] = {}
+            if _STATE_FILE.exists():
+                with open(_STATE_FILE, encoding="utf-8") as f:
+                    state = json.load(f)
+            state[issue_key] = entry
+            with open(_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
 _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
 ).resolve()
@@ -202,18 +222,23 @@ def _extract_analysis_text(comments: list[dict[str, str]]) -> str | None:
 _SECTION_RE = re.compile(r"^###\s+(\d+)\.\s+(.+)$", re.MULTILINE)
 
 
-def _extract_section_by_title(text: str, keyword: str) -> str:
-    """Extract section content by matching keyword in the section title.
+def _extract_section_by_title(text: str, keywords: str | list[str]) -> str:
+    """Extract section content by matching any keyword in the section title.
 
     More robust than number-based lookup: survives chapter renumbering.
+    If multiple sections match, their contents are concatenated.
     """
+    if isinstance(keywords, str):
+        keywords = [keywords]
     matches = list(_SECTION_RE.finditer(text))
+    parts: list[str] = []
     for i, m in enumerate(matches):
-        if keyword in m.group(2):
+        title = m.group(2)
+        if any(kw in title for kw in keywords):
             start = m.end()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-            return text[start:end].strip()
-    return ""
+            parts.append(text[start:end].strip())
+    return "\n\n".join(parts)
 
 
 def _parse_surface_from_execution(section: str) -> str:
@@ -255,12 +280,18 @@ def parse_analysis_comment(
     if not analysis:
         return None
 
-    plan_section = _extract_section_by_title(analysis, "推荐方案")
-    exec_section = _extract_section_by_title(analysis, "执行路径")
-    scope_section = _extract_section_by_title(analysis, "Scope")
-    evidence_section = _extract_section_by_title(analysis, "影响模块")
+    plan_section = _extract_section_by_title(
+        analysis, ["推荐方案", "修复方案", "建议行动", "实现方案", "解决方案"]
+    )
+    exec_section = _extract_section_by_title(analysis, ["执行路径"])
+    scope_section = _extract_section_by_title(
+        analysis, ["Scope", "scope", "范围评估"]
+    )
+    evidence_section = _extract_section_by_title(
+        analysis, ["影响模块", "涉及文件", "关键代码", "影响范围", "Evidence"]
+    )
 
-    surface = _parse_surface_from_execution(exec_section)
+    surface = _parse_surface_from_execution(exec_section or analysis)
     # Use central (AI-MYG/asp) number for branch so it aligns with Smart PR
     branch_number = central_number if central_number else issue_number
     branch = f"issue-{branch_number}/{surface}"
@@ -588,7 +619,9 @@ def execute_issue(
     base_branch = _SURFACE_BASE_BRANCH.get(spec.surface, "main")
 
     if dry_run:
-        print(f"  [DRY RUN] Would create worktree from {surface_repo}")
+        wt_path = _WORKTREE_DIR / f"issue-{number}"
+        print(f"  [DRY RUN] Surface repo: {surface_repo}")
+        print(f"  [DRY RUN] Worktree: {wt_path}")
         print(f"  [DRY RUN] Branch: {spec.branch} from {base_branch}")
         print(f"  [DRY RUN] Affected files: {spec.affected_files}")
         print(f"  [DRY RUN] Plan:\n{spec.plan_text[:500]}")
@@ -809,7 +842,7 @@ def main() -> None:
 
         candidates.append((issue, spec))
 
-    if not args.issue:
+    if not args.issue and not args.scan_only:
         candidates = candidates[: args.batch]
 
     print(f"\nExecutor queue ({operator}): {len(issues)} analyzed, {len(candidates)} ready to execute")
@@ -914,11 +947,9 @@ def main() -> None:
                 skip_pr=args.skip_pr,
             )
             if entry:
-                state[str(issue["number"])] = entry
+                # Atomic per-key merge: safe even when called as parallel subprocess
+                _merge_state_entry(str(issue["number"]), entry)
                 processed += 1
-
-        if not args.dry_run:
-            _write_state(state)
 
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")
 
