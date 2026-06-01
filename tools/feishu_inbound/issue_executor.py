@@ -68,6 +68,26 @@ def _write_state(state: dict[str, Any]) -> None:
         finally:
             fcntl.flock(lf, fcntl.LOCK_UN)
 
+
+def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
+    """Atomic read-merge-write of a single issue key under exclusive lock.
+
+    Safe for parallel subprocesses: each only touches its own key.
+    """
+    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            state: dict[str, Any] = {}
+            if _STATE_FILE.exists():
+                with open(_STATE_FILE, encoding="utf-8") as f:
+                    state = json.load(f)
+            state[issue_key] = entry
+            with open(_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
 _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
 ).resolve()
@@ -202,18 +222,23 @@ def _extract_analysis_text(comments: list[dict[str, str]]) -> str | None:
 _SECTION_RE = re.compile(r"^###\s+(\d+)\.\s+(.+)$", re.MULTILINE)
 
 
-def _extract_section_by_title(text: str, keyword: str) -> str:
-    """Extract section content by matching keyword in the section title.
+def _extract_section_by_title(text: str, keywords: str | list[str]) -> str:
+    """Extract section content by matching any keyword in the section title.
 
     More robust than number-based lookup: survives chapter renumbering.
+    If multiple sections match, their contents are concatenated.
     """
+    if isinstance(keywords, str):
+        keywords = [keywords]
     matches = list(_SECTION_RE.finditer(text))
+    parts: list[str] = []
     for i, m in enumerate(matches):
-        if keyword in m.group(2):
+        title = m.group(2)
+        if any(kw in title for kw in keywords):
             start = m.end()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-            return text[start:end].strip()
-    return ""
+            parts.append(text[start:end].strip())
+    return "\n\n".join(parts)
 
 
 def _parse_surface_from_execution(section: str) -> str:
@@ -255,12 +280,18 @@ def parse_analysis_comment(
     if not analysis:
         return None
 
-    plan_section = _extract_section_by_title(analysis, "推荐方案")
-    exec_section = _extract_section_by_title(analysis, "执行路径")
-    scope_section = _extract_section_by_title(analysis, "Scope")
-    evidence_section = _extract_section_by_title(analysis, "影响模块")
+    plan_section = _extract_section_by_title(
+        analysis, ["推荐方案", "修复方案", "建议行动", "实现方案", "解决方案"]
+    )
+    exec_section = _extract_section_by_title(analysis, ["执行路径"])
+    scope_section = _extract_section_by_title(
+        analysis, ["Scope", "scope", "范围评估"]
+    )
+    evidence_section = _extract_section_by_title(
+        analysis, ["影响模块", "涉及文件", "关键代码", "影响范围", "Evidence"]
+    )
 
-    surface = _parse_surface_from_execution(exec_section)
+    surface = _parse_surface_from_execution(exec_section or analysis)
     # Use central (AI-MYG/asp) number for branch so it aligns with Smart PR
     branch_number = central_number if central_number else issue_number
     branch = f"issue-{branch_number}/{surface}"
@@ -463,30 +494,55 @@ def _has_linked_pr(number: int, central_number: int | None = None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Git branch helpers
+# Git worktree helpers — each issue gets an isolated worktree so multiple
+# issues on the same surface can execute in parallel without conflicts.
 # ---------------------------------------------------------------------------
-def _create_issue_branch(worktree_path: Path, branch: str, base_branch: str) -> bool:
-    """Create and checkout issue branch in worktree. Returns True on success."""
+_WORKTREE_DIR = _ASP_ROOT / "worktrees"
+
+
+def _create_issue_worktree(
+    surface_repo: Path, branch: str, base_branch: str, issue_number: int,
+) -> Path | None:
+    """Create a git worktree for the issue branch. Returns worktree path or None."""
+    worktree_path = _WORKTREE_DIR / f"issue-{issue_number}"
     try:
-        # Fetch latest
-        sp.run(["git", "fetch", "origin"], cwd=worktree_path, check=True, capture_output=True)
-        # Check if branch already exists on remote
+        sp.run(["git", "fetch", "origin"], cwd=surface_repo, check=True, capture_output=True)
+
+        if worktree_path.exists():
+            sp.run(["git", "worktree", "remove", "--force", str(worktree_path)],
+                   cwd=surface_repo, capture_output=True)
+
         result = sp.run(
             ["git", "branch", "-r", "--list", f"origin/{branch}"],
-            cwd=worktree_path, capture_output=True, text=True,
+            cwd=surface_repo, capture_output=True, text=True,
         )
+
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
         if result.stdout.strip():
-            # Remote branch exists, checkout and track
-            sp.run(["git", "checkout", "-B", branch, f"origin/{branch}"],
-                    cwd=worktree_path, check=True, capture_output=True)
+            sp.run(
+                ["git", "worktree", "add", "-B", branch, str(worktree_path), f"origin/{branch}"],
+                cwd=surface_repo, check=True, capture_output=True, text=True,
+            )
         else:
-            # Create new branch from base
-            sp.run(["git", "checkout", "-B", branch, f"origin/{base_branch}"],
-                    cwd=worktree_path, check=True, capture_output=True)
-        return True
+            sp.run(
+                ["git", "worktree", "add", "-b", branch, str(worktree_path), f"origin/{base_branch}"],
+                cwd=surface_repo, check=True, capture_output=True, text=True,
+            )
+        return worktree_path
     except sp.CalledProcessError as e:
-        print(f"  Error creating branch {branch}: {e.stderr}")
-        return False
+        print(f"  Error creating worktree for {branch}: {e.stderr if hasattr(e, 'stderr') else e}")
+        return None
+
+
+def _remove_issue_worktree(surface_repo: Path, worktree_path: Path) -> None:
+    """Remove the temporary issue worktree."""
+    try:
+        sp.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            cwd=surface_repo, capture_output=True, text=True, timeout=30,
+        )
+    except (sp.CalledProcessError, sp.TimeoutExpired):
+        pass
 
 
 def _push_branch(worktree_path: Path, branch: str) -> bool:
@@ -555,15 +611,17 @@ def execute_issue(
     print(f"  Scope: {spec.scope}, Files: {len(spec.affected_files)}")
     print(f"{'='*60}")
 
-    worktree_path = _WORKTREE_ROOT / spec.worktree_dir
-    if not worktree_path.exists():
-        print(f"  Error: worktree path does not exist: {worktree_path}")
+    surface_repo = _WORKTREE_ROOT / spec.worktree_dir
+    if not surface_repo.exists():
+        print(f"  Error: surface repo does not exist: {surface_repo}")
         return None
 
     base_branch = _SURFACE_BASE_BRANCH.get(spec.surface, "main")
 
     if dry_run:
-        print(f"  [DRY RUN] Would execute in {worktree_path}")
+        wt_path = _WORKTREE_DIR / f"issue-{number}"
+        print(f"  [DRY RUN] Surface repo: {surface_repo}")
+        print(f"  [DRY RUN] Worktree: {wt_path}")
         print(f"  [DRY RUN] Branch: {spec.branch} from {base_branch}")
         print(f"  [DRY RUN] Affected files: {spec.affected_files}")
         print(f"  [DRY RUN] Plan:\n{spec.plan_text[:500]}")
@@ -574,12 +632,15 @@ def execute_issue(
         print(f"  #{number}: locked (execution-in-progress), skipping")
         return None
 
+    issue_worktree: Path | None = None
     try:
-        # 2. Create issue branch
-        if not _create_issue_branch(worktree_path, spec.branch, base_branch):
-            print(f"  Failed to create branch {spec.branch}")
+        # 2. Create isolated worktree for this issue
+        issue_worktree = _create_issue_worktree(surface_repo, spec.branch, base_branch, number)
+        if not issue_worktree:
+            print(f"  Failed to create worktree for {spec.branch}")
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
+        print(f"  Worktree created: {issue_worktree}")
 
         # 3. Run agent
         if AgentClient is None:
@@ -587,16 +648,16 @@ def execute_issue(
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
 
-        prompt = _build_execution_prompt(issue, spec, str(worktree_path))
+        prompt = _build_execution_prompt(issue, spec, str(issue_worktree))
         timeout = int(os.getenv("AGENT_CLIENT_TIMEOUT", "3600"))
         if spec.scope == "S":
             timeout = min(timeout, 1200)
 
-        print(f"  Running AgentClient (workdir={worktree_path}, timeout={timeout}s)...")
+        print(f"  Running AgentClient (workdir={issue_worktree}, timeout={timeout}s)...")
         result = AgentClient().run(
             prompt,
             intent="execution",
-            workdir=str(worktree_path),
+            workdir=str(issue_worktree),
             timeout_sec=timeout,
         )
 
@@ -608,7 +669,7 @@ def execute_issue(
         print(f"  Agent completed: {result.executor}/{result.model or 'default'} ({result.elapsed_sec}s)")
 
         # 4. Verify changes exist
-        if not _has_commits_ahead(worktree_path, base_branch) and not _has_changes(worktree_path):
+        if not _has_commits_ahead(issue_worktree, base_branch) and not _has_changes(issue_worktree):
             print(f"  Warning: no changes detected after agent execution")
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
@@ -616,7 +677,7 @@ def execute_issue(
         # 4.5. Push branch to remote (required before PR creation)
         if not skip_pr:
             print(f"  Pushing branch {spec.branch} to remote...")
-            if not _push_branch(worktree_path, spec.branch):
+            if not _push_branch(issue_worktree, spec.branch):
                 print(f"  Push failed, not marking as executed")
                 _add_label(number, _FAILED_LABEL, dry_run=False)
                 return None
@@ -636,7 +697,7 @@ def execute_issue(
             try:
                 proc = sp.run(
                     cmd,
-                    cwd=str(worktree_path),
+                    cwd=str(issue_worktree),
                     capture_output=True, text=True, timeout=120,
                 )
                 if proc.returncode == 0:
@@ -674,6 +735,8 @@ def execute_issue(
 
     finally:
         _release_lock(number)
+        if issue_worktree:
+            _remove_issue_worktree(surface_repo, issue_worktree)
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +842,7 @@ def main() -> None:
 
         candidates.append((issue, spec))
 
-    if not args.issue:
+    if not args.issue and not args.scan_only:
         candidates = candidates[: args.batch]
 
     print(f"\nExecutor queue ({operator}): {len(issues)} analyzed, {len(candidates)} ready to execute")
@@ -884,11 +947,9 @@ def main() -> None:
                 skip_pr=args.skip_pr,
             )
             if entry:
-                state[str(issue["number"])] = entry
+                # Atomic per-key merge: safe even when called as parallel subprocess
+                _merge_state_entry(str(issue["number"]), entry)
                 processed += 1
-
-        if not args.dry_run:
-            _write_state(state)
 
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")
 
