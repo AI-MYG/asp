@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Install ASP launchd jobs (Observer + Reflector + Feishu Inbound Pipeline B/C)
+# Install ASP launchd jobs (Observer + Reflector + Feishu Inbound Pipeline B/C/D)
 #
 # Usage:
 #   bash launchd/install.sh [--uninstall]
-#   bash launchd/install.sh --with-feishu-inbound   # include Pipeline B+C agents
+#   bash launchd/install.sh --with-feishu-inbound   # include Pipeline B+C+D agents
 
 set -euo pipefail
 
@@ -15,8 +15,9 @@ OBSERVER_LABEL="com.asp.observer"
 REFLECTOR_LABEL="com.asp.reflector"
 TRIAGE_LABEL="com.asp.feishu-inbound-triage"
 AGENT_LABEL="com.asp.feishu-inbound-agent"
+EXECUTOR_LABEL="com.asp.issue-executor"
 
-ALL_LABELS=("$OBSERVER_LABEL" "$REFLECTOR_LABEL" "$TRIAGE_LABEL" "$AGENT_LABEL")
+ALL_LABELS=("$OBSERVER_LABEL" "$REFLECTOR_LABEL" "$TRIAGE_LABEL" "$AGENT_LABEL" "$EXECUTOR_LABEL")
 
 uninstall() {
   echo "Uninstalling ASP launchd jobs..."
@@ -185,6 +186,48 @@ cat > "$LAUNCH_AGENTS/$AGENT_LABEL.plist" <<EOF
 </plist>
 EOF
 
+# --- Pipeline D: Issue executor (weekdays, :35 and :05 past 9-18, offset +15 from C) ---
+cat > "$LAUNCH_AGENTS/$EXECUTOR_LABEL.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$EXECUTOR_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$REPO_ROOT/scripts/run_issue_executor.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>35</integer></dict>
+  </array>
+  <key>StandardOutPath</key>
+  <string>$REPO_ROOT/logs/issue-executor.log</string>
+  <key>StandardErrorPath</key>
+  <string>$REPO_ROOT/logs/issue-executor.err</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO_ROOT</string>
+</dict>
+</plist>
+EOF
+
 # Create logs directory
 mkdir -p "$REPO_ROOT/logs"
 
@@ -203,4 +246,5 @@ echo "  Observer:  daily at 22:00       ($OBSERVER_LABEL)"
 echo "  Reflector: Sunday at 10:00      ($REFLECTOR_LABEL)"
 echo "  Triage:    weekdays :10/:40     ($TRIAGE_LABEL)"
 echo "  Agent:     weekdays :20/:50     ($AGENT_LABEL)"
+echo "  Executor:  weekdays :35/:05     ($EXECUTOR_LABEL)"
 echo "  Logs: $REPO_ROOT/logs/"

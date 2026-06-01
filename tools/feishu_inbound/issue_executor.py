@@ -174,26 +174,29 @@ def _extract_analysis_text(comments: list[dict[str, str]]) -> str | None:
 _SECTION_RE = re.compile(r"^###\s+(\d+)\.\s+(.+)$", re.MULTILINE)
 
 
-def _extract_section(text: str, number: int) -> str:
-    """Extract content of section ### N. ... up to the next ### or end."""
+def _extract_section_by_title(text: str, keyword: str) -> str:
+    """Extract section content by matching keyword in the section title.
+
+    More robust than number-based lookup: survives chapter renumbering.
+    """
     matches = list(_SECTION_RE.finditer(text))
     for i, m in enumerate(matches):
-        if int(m.group(1)) == number:
+        if keyword in m.group(2):
             start = m.end()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             return text[start:end].strip()
     return ""
 
 
-def _parse_surface_from_execution(section6: str) -> str:
-    """Extract surface from '### 6. 执行路径' section."""
+def _parse_surface_from_execution(section: str) -> str:
+    """Extract surface from '执行路径' section."""
     # Look for branch pattern: issue-{N}/{surface}
-    m = re.search(r"issue-\d+/(\w+)", section6)
+    m = re.search(r"issue-\d+/(\w+)", section)
     if m:
         return m.group(1)
     # Fallback: look for worktree dir
     for surface, wdir in _SURFACE_WORKTREE.items():
-        if wdir in section6 or surface in section6.lower():
+        if wdir in section or surface in section.lower():
             return surface
     return "backend"
 
@@ -212,23 +215,31 @@ def _parse_affected_files(text: str) -> list[str]:
 def parse_analysis_comment(
     comments: list[dict[str, str]],
     issue_number: int,
+    central_number: int | None = None,
 ) -> ExecutionSpec | None:
-    """Parse the Analysis comment into an ExecutionSpec."""
+    """Parse the Analysis comment into an ExecutionSpec.
+
+    Args:
+        central_number: AI-MYG/asp issue number. When available, used for
+            branch naming so it matches Smart PR's ``--issue`` parameter.
+    """
     analysis = _extract_analysis_text(comments)
     if not analysis:
         return None
 
-    section5 = _extract_section(analysis, 5)  # 推荐方案
-    section6 = _extract_section(analysis, 6)  # 执行路径
-    section7 = _extract_section(analysis, 7)  # Scope
+    plan_section = _extract_section_by_title(analysis, "推荐方案")
+    exec_section = _extract_section_by_title(analysis, "执行路径")
+    scope_section = _extract_section_by_title(analysis, "Scope")
+    evidence_section = _extract_section_by_title(analysis, "影响模块")
 
-    surface = _parse_surface_from_execution(section6)
-    branch = f"issue-{issue_number}/{surface}"
+    surface = _parse_surface_from_execution(exec_section)
+    # Use central (AI-MYG/asp) number for branch so it aligns with Smart PR
+    branch_number = central_number if central_number else issue_number
+    branch = f"issue-{branch_number}/{surface}"
     worktree_dir = _SURFACE_WORKTREE.get(surface, f"projects/asp/{surface}")
 
     # Check product ambiguity
     ambiguity_section = ""
-    # Look for "### 待确认（产品）" section
     m = re.search(r"###\s*待确认[（(]产品[）)](.+?)(?=###|$)", analysis, re.DOTALL)
     if m:
         ambiguity_section = m.group(1).strip()
@@ -236,19 +247,19 @@ def parse_analysis_comment(
 
     # Parse scope
     scope = "S"
-    scope_match = re.match(r"(S|M|L)", section7)
+    scope_match = re.match(r"(S|M|L)", scope_section)
     if scope_match:
         scope = scope_match.group(1)
 
     affected = _parse_affected_files(
-        _extract_section(analysis, 3) + "\n" + section5
+        evidence_section + "\n" + plan_section
     )
 
     return ExecutionSpec(
         surface=surface,
         branch=branch,
         worktree_dir=worktree_dir,
-        plan_text=section5,
+        plan_text=plan_section,
         affected_files=affected,
         scope=scope,
         has_product_ambiguity=has_ambiguity,
@@ -298,10 +309,10 @@ def needs_execution(
         return "skip_data_pending_approval"
 
     number = issue.get("number")
-    if number and _has_linked_pr(number):
+    central_number = _extract_central_number(issue)
+    if number and _has_linked_pr(number, central_number):
         return "skip_has_pr"
 
-    central_number = _extract_central_number(issue)
     difficulty = _get_difficulty(issue, central_number)
     if difficulty != "trivial" and _APPROVED_LABEL not in labels:
         return "skip_pending_approval"
@@ -394,22 +405,32 @@ def _release_lock(number: int) -> None:
     _remove_label(number, _LOCK_LABEL)
 
 
-def _has_linked_pr(number: int) -> bool:
-    """Check if there's an open or merged PR for this issue (branch pattern issue-{N}/)."""
-    try:
-        raw = run_gh(
-            "pr", "list", "-R", REPO,
-            "--search", f"issue-{number}/",
-            "--state", "all",
-            "--json", "number,state,headRefName",
-        )
-        prs = json.loads(raw)
-        for pr in prs:
-            branch = pr.get("headRefName", "")
-            if branch.startswith(f"issue-{number}/"):
-                return True
-    except (RuntimeError, json.JSONDecodeError):
-        pass
+def _has_linked_pr(number: int, central_number: int | None = None) -> bool:
+    """Check if there's an open or merged PR for this issue.
+
+    Searches branch pattern ``issue-{N}/`` for both the backend issue number
+    and the central AI-MYG/asp number (if available) to catch PRs created
+    with either numbering scheme.
+    """
+    numbers_to_check = [number]
+    if central_number and central_number != number:
+        numbers_to_check.append(central_number)
+
+    for n in numbers_to_check:
+        try:
+            raw = run_gh(
+                "pr", "list", "-R", REPO,
+                "--search", f"issue-{n}/",
+                "--state", "all",
+                "--json", "number,state,headRefName",
+            )
+            prs = json.loads(raw)
+            for pr in prs:
+                branch = pr.get("headRefName", "")
+                if branch.startswith(f"issue-{n}/"):
+                    return True
+        except (RuntimeError, json.JSONDecodeError):
+            pass
     return False
 
 
@@ -718,7 +739,8 @@ def main() -> None:
             print(f"  #{number}: {reason}")
             continue
 
-        spec = parse_analysis_comment(comments, number)
+        central = _extract_central_number(issue)
+        spec = parse_analysis_comment(comments, number, central_number=central)
         if not spec:
             print(f"  #{number}: could not parse Analysis comment")
             continue
