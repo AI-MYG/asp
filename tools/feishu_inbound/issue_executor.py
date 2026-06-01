@@ -559,6 +559,7 @@ def _push_branch(worktree_path: Path, branch: str) -> bool:
         return False
 
 
+
 def _has_changes(worktree_path: Path) -> bool:
     """Check if worktree has uncommitted or staged changes."""
     result = sp.run(
@@ -683,16 +684,17 @@ def execute_issue(
                 return None
 
         # 5. Smart PR
-        central_number = _extract_central_number(issue)
-        pr_issue_number = central_number if central_number else number
         pr_result: dict[str, Any] = {}
         if not skip_pr:
-            print(f"  Running Smart PR (--issue {pr_issue_number} --surface {spec.surface})...")
+            print(f"  Running Smart PR (--issue {number} --surface {spec.surface})...")
             smart_pr_path = _ASP_ROOT / "tools" / "smart_pr.py"
+            model_tag = f"{result.executor}/{result.model}" if result.model else result.executor
             cmd = [
                 sys.executable, str(smart_pr_path),
-                "--issue", str(pr_issue_number),
+                "--issue", str(number),
                 "--surface", spec.surface,
+                "--issue-repo", REPO,
+                "--model", model_tag,
             ]
             try:
                 proc = sp.run(
