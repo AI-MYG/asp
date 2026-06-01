@@ -77,19 +77,21 @@ def _run_opencode(
         combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
         assistant_text = _extract_last_assistant_block(combined)
 
-        # DEBUG: dump raw output for diagnosis
-        _debug_path = _ASP_ROOT / "logs" / "agent_client_debug.log"
-        try:
-            _debug_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(_debug_path, "a", encoding="utf-8") as _df:
-                _df.write(f"\n{'='*60}\n")
-                _df.write(f"prompt_len={len(prompt)}\n")
-                _df.write(f"returncode={proc.returncode}\n")
-                _df.write(f"assistant_text_len={len(assistant_text) if assistant_text else 0}\n")
-                _df.write(f"--- assistant_text ---\n{assistant_text}\n")
-                _df.write(f"--- combined (first 5000) ---\n{combined[:5000]}\n")
-        except Exception:
-            pass
+        # DEBUG: dump raw output for diagnosis (opt-in or on failure)
+        _write_debug = os.getenv("AGENT_CLIENT_DEBUG", "").lower() in ("1", "true") or proc.returncode != 0
+        if _write_debug:
+            _debug_path = _ASP_ROOT / "logs" / "agent_client_debug.log"
+            try:
+                _debug_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(_debug_path, "a", encoding="utf-8") as _df:
+                    _df.write(f"\n{'='*60}\n")
+                    _df.write(f"prompt_len={len(prompt)}\n")
+                    _df.write(f"returncode={proc.returncode}\n")
+                    _df.write(f"assistant_text_len={len(assistant_text) if assistant_text else 0}\n")
+                    _df.write(f"--- assistant_text ---\n{assistant_text}\n")
+                    _df.write(f"--- combined (first 5000) ---\n{combined[:5000]}\n")
+            except Exception:
+                pass
 
         if proc.returncode != 0 and not assistant_text:
             return "failed", combined[:4000], f"opencode_job exited with code {proc.returncode}"

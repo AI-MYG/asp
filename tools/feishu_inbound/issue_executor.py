@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -39,6 +40,33 @@ from typing import Any
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _ASP_ROOT = _SCRIPT_DIR.parent.parent
 _STATE_FILE = _ASP_ROOT / "state" / "issue_executor_state.json"
+_STATE_LOCK = _ASP_ROOT / "state" / "issue_executor_state.lock"
+
+
+def _read_state() -> dict[str, Any]:
+    """Read state file with file lock (parallel-safe)."""
+    if not _STATE_FILE.exists():
+        return {}
+    _STATE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_SH)
+        try:
+            with open(_STATE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
+
+def _write_state(state: dict[str, Any]) -> None:
+    """Write state file with exclusive file lock (parallel-safe)."""
+    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            with open(_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
 
 _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
@@ -782,10 +810,7 @@ def main() -> None:
             print(f"  Stale surfaces: {', '.join(report.stale_surfaces)}")
 
     # Load state
-    state: dict[str, Any] = {}
-    if _STATE_FILE.exists():
-        with open(_STATE_FILE, encoding="utf-8") as f:
-            state = json.load(f)
+    state: dict[str, Any] = _read_state()
 
     # --- Parallel multi-issue via subprocess ---
     if args.parallel and len(candidates) > 1 and not args.dry_run:
@@ -844,9 +869,7 @@ def main() -> None:
                 time.sleep(5)
 
         # Reload state
-        if _STATE_FILE.exists():
-            with open(_STATE_FILE, encoding="utf-8") as f:
-                state = json.load(f)
+        state = _read_state()
 
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")
 
@@ -865,9 +888,7 @@ def main() -> None:
                 processed += 1
 
         if not args.dry_run:
-            _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
+            _write_state(state)
 
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")
 
