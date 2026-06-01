@@ -268,14 +268,8 @@ def _parse_affected_files(text: str) -> list[str]:
 def parse_analysis_comment(
     comments: list[dict[str, str]],
     issue_number: int,
-    central_number: int | None = None,
 ) -> ExecutionSpec | None:
-    """Parse the Analysis comment into an ExecutionSpec.
-
-    Args:
-        central_number: AI-MYG/asp issue number. When available, used for
-            branch naming so it matches Smart PR's ``--issue`` parameter.
-    """
+    """Parse the Analysis comment into an ExecutionSpec."""
     analysis = _extract_analysis_text(comments)
     if not analysis:
         return None
@@ -292,9 +286,8 @@ def parse_analysis_comment(
     )
 
     surface = _parse_surface_from_execution(exec_section or analysis)
-    # Use central (AI-MYG/asp) number for branch so it aligns with Smart PR
-    branch_number = central_number if central_number else issue_number
-    branch = f"issue-{branch_number}/{surface}"
+    # Always use backend issue number for branch — matches Smart PR --issue
+    branch = f"issue-{issue_number}/{surface}"
     worktree_dir = _SURFACE_WORKTREE.get(surface, f"projects/asp/{surface}")
 
     # Check product ambiguity
@@ -306,7 +299,7 @@ def parse_analysis_comment(
 
     # Parse scope
     scope = "S"
-    scope_match = re.match(r"(S|M|L)", scope_section)
+    scope_match = re.search(r"\b(S|M|L)\b", scope_section)
     if scope_match:
         scope = scope_match.group(1)
 
@@ -851,8 +844,7 @@ def main() -> None:
             print(f"  #{number}: {reason}")
             continue
 
-        central = _extract_central_number(issue)
-        spec = parse_analysis_comment(comments, number, central_number=central)
+        spec = parse_analysis_comment(comments, number)
         if not spec:
             print(f"  #{number}: could not parse Analysis comment")
             continue
@@ -892,9 +884,6 @@ def main() -> None:
         report = sync_asp_worktrees(required, operator=operator)
         if report.stale_surfaces:
             print(f"  Stale surfaces: {', '.join(report.stale_surfaces)}")
-
-    # Load state
-    state: dict[str, Any] = _read_state()
 
     # --- Parallel multi-issue via subprocess ---
     if args.parallel and len(candidates) > 1 and not args.dry_run:
@@ -961,9 +950,6 @@ def main() -> None:
 
             if active:
                 time.sleep(5)
-
-        # Reload state
-        state = _read_state()
 
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")
 
