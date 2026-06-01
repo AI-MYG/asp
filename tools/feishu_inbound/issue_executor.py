@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -39,6 +40,33 @@ from typing import Any
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _ASP_ROOT = _SCRIPT_DIR.parent.parent
 _STATE_FILE = _ASP_ROOT / "state" / "issue_executor_state.json"
+_STATE_LOCK = _ASP_ROOT / "state" / "issue_executor_state.lock"
+
+
+def _read_state() -> dict[str, Any]:
+    """Read state file with file lock (parallel-safe)."""
+    if not _STATE_FILE.exists():
+        return {}
+    _STATE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_SH)
+        try:
+            with open(_STATE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
+
+def _write_state(state: dict[str, Any]) -> None:
+    """Write state file with exclusive file lock (parallel-safe)."""
+    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            with open(_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
 
 _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
@@ -55,7 +83,11 @@ from routing import (  # noqa: E402
 REPO = "AI-MYG/asp-backend"
 
 from inbound_agent import (  # noqa: E402
+    ISSUE_TYPE_DATA,
+    ISSUE_TYPE_FEATURE,
+    ISSUE_TYPE_OPERATIONAL,
     _load_env,
+    extract_issue_type,
     fetch_issue_comments,
     has_analysis_comment,
 )
@@ -170,26 +202,29 @@ def _extract_analysis_text(comments: list[dict[str, str]]) -> str | None:
 _SECTION_RE = re.compile(r"^###\s+(\d+)\.\s+(.+)$", re.MULTILINE)
 
 
-def _extract_section(text: str, number: int) -> str:
-    """Extract content of section ### N. ... up to the next ### or end."""
+def _extract_section_by_title(text: str, keyword: str) -> str:
+    """Extract section content by matching keyword in the section title.
+
+    More robust than number-based lookup: survives chapter renumbering.
+    """
     matches = list(_SECTION_RE.finditer(text))
     for i, m in enumerate(matches):
-        if int(m.group(1)) == number:
+        if keyword in m.group(2):
             start = m.end()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             return text[start:end].strip()
     return ""
 
 
-def _parse_surface_from_execution(section6: str) -> str:
-    """Extract surface from '### 6. 执行路径' section."""
+def _parse_surface_from_execution(section: str) -> str:
+    """Extract surface from '执行路径' section."""
     # Look for branch pattern: issue-{N}/{surface}
-    m = re.search(r"issue-\d+/(\w+)", section6)
+    m = re.search(r"issue-\d+/(\w+)", section)
     if m:
         return m.group(1)
     # Fallback: look for worktree dir
     for surface, wdir in _SURFACE_WORKTREE.items():
-        if wdir in section6 or surface in section6.lower():
+        if wdir in section or surface in section.lower():
             return surface
     return "backend"
 
@@ -208,23 +243,31 @@ def _parse_affected_files(text: str) -> list[str]:
 def parse_analysis_comment(
     comments: list[dict[str, str]],
     issue_number: int,
+    central_number: int | None = None,
 ) -> ExecutionSpec | None:
-    """Parse the Analysis comment into an ExecutionSpec."""
+    """Parse the Analysis comment into an ExecutionSpec.
+
+    Args:
+        central_number: AI-MYG/asp issue number. When available, used for
+            branch naming so it matches Smart PR's ``--issue`` parameter.
+    """
     analysis = _extract_analysis_text(comments)
     if not analysis:
         return None
 
-    section5 = _extract_section(analysis, 5)  # 推荐方案
-    section6 = _extract_section(analysis, 6)  # 执行路径
-    section7 = _extract_section(analysis, 7)  # Scope
+    plan_section = _extract_section_by_title(analysis, "推荐方案")
+    exec_section = _extract_section_by_title(analysis, "执行路径")
+    scope_section = _extract_section_by_title(analysis, "Scope")
+    evidence_section = _extract_section_by_title(analysis, "影响模块")
 
-    surface = _parse_surface_from_execution(section6)
-    branch = f"issue-{issue_number}/{surface}"
+    surface = _parse_surface_from_execution(exec_section)
+    # Use central (AI-MYG/asp) number for branch so it aligns with Smart PR
+    branch_number = central_number if central_number else issue_number
+    branch = f"issue-{branch_number}/{surface}"
     worktree_dir = _SURFACE_WORKTREE.get(surface, f"projects/asp/{surface}")
 
     # Check product ambiguity
     ambiguity_section = ""
-    # Look for "### 待确认（产品）" section
     m = re.search(r"###\s*待确认[（(]产品[）)](.+?)(?=###|$)", analysis, re.DOTALL)
     if m:
         ambiguity_section = m.group(1).strip()
@@ -232,19 +275,19 @@ def parse_analysis_comment(
 
     # Parse scope
     scope = "S"
-    scope_match = re.match(r"(S|M|L)", section7)
+    scope_match = re.match(r"(S|M|L)", scope_section)
     if scope_match:
         scope = scope_match.group(1)
 
     affected = _parse_affected_files(
-        _extract_section(analysis, 3) + "\n" + section5
+        evidence_section + "\n" + plan_section
     )
 
     return ExecutionSpec(
         surface=surface,
         branch=branch,
         worktree_dir=worktree_dir,
-        plan_text=section5,
+        plan_text=plan_section,
         affected_files=affected,
         scope=scope,
         has_product_ambiguity=has_ambiguity,
@@ -284,7 +327,20 @@ def needs_execution(
     if not has_analysis_comment(comments):
         return "skip_no_analysis"
 
+    # Read issue type directly from Pipeline C's analysis comment (SSOT)
+    analysis_text = _extract_analysis_text(comments) or ""
+    issue_type = extract_issue_type(analysis_text)
+
+    if issue_type == ISSUE_TYPE_OPERATIONAL:
+        return "skip_operational"
+    if issue_type == ISSUE_TYPE_DATA and _APPROVED_LABEL not in labels:
+        return "skip_data_pending_approval"
+
+    number = issue.get("number")
     central_number = _extract_central_number(issue)
+    if number and _has_linked_pr(number, central_number):
+        return "skip_has_pr"
+
     difficulty = _get_difficulty(issue, central_number)
     if difficulty != "trivial" and _APPROVED_LABEL not in labels:
         return "skip_pending_approval"
@@ -375,6 +431,35 @@ def _acquire_lock(number: int, dry_run: bool) -> bool:
 
 def _release_lock(number: int) -> None:
     _remove_label(number, _LOCK_LABEL)
+
+
+def _has_linked_pr(number: int, central_number: int | None = None) -> bool:
+    """Check if there's an open or merged PR for this issue.
+
+    Searches branch pattern ``issue-{N}/`` for both the backend issue number
+    and the central AI-MYG/asp number (if available) to catch PRs created
+    with either numbering scheme.
+    """
+    numbers_to_check = [number]
+    if central_number and central_number != number:
+        numbers_to_check.append(central_number)
+
+    for n in numbers_to_check:
+        try:
+            raw = run_gh(
+                "pr", "list", "-R", REPO,
+                "--search", f"issue-{n}/",
+                "--state", "all",
+                "--json", "number,state,headRefName",
+            )
+            prs = json.loads(raw)
+            for pr in prs:
+                branch = pr.get("headRefName", "")
+                if branch.startswith(f"issue-{n}/"):
+                    return True
+        except (RuntimeError, json.JSONDecodeError):
+            pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +767,8 @@ def main() -> None:
             print(f"  #{number}: {reason}")
             continue
 
-        spec = parse_analysis_comment(comments, number)
+        central = _extract_central_number(issue)
+        spec = parse_analysis_comment(comments, number, central_number=central)
         if not spec:
             print(f"  #{number}: could not parse Analysis comment")
             continue
@@ -724,10 +810,7 @@ def main() -> None:
             print(f"  Stale surfaces: {', '.join(report.stale_surfaces)}")
 
     # Load state
-    state: dict[str, Any] = {}
-    if _STATE_FILE.exists():
-        with open(_STATE_FILE, encoding="utf-8") as f:
-            state = json.load(f)
+    state: dict[str, Any] = _read_state()
 
     # --- Parallel multi-issue via subprocess ---
     if args.parallel and len(candidates) > 1 and not args.dry_run:
@@ -786,9 +869,7 @@ def main() -> None:
                 time.sleep(5)
 
         # Reload state
-        if _STATE_FILE.exists():
-            with open(_STATE_FILE, encoding="utf-8") as f:
-                state = json.load(f)
+        state = _read_state()
 
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")
 
@@ -807,9 +888,7 @@ def main() -> None:
                 processed += 1
 
         if not args.dry_run:
-            _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
+            _write_state(state)
 
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")
 

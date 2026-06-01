@@ -10,6 +10,8 @@ set -euo pipefail
 
 export TZ=Asia/Shanghai
 export PYTHONUNBUFFERED=1
+export PYTHONDONTWRITEBYTECODE=1
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

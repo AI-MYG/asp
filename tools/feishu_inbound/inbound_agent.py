@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import re
 import requests
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -117,30 +118,42 @@ ASP Debug（平台/环境/问题类别 + Evidence Gate）: `skills/contract_debu
 ### 1. 需求概述
 2-3 句，仅复述 Issue 事实。
 
-### 2. 去重判断
+### 2. 问题分类
+从以下三类中选**唯一一项**，写明分类和一句依据：
+- **操作问题**: 用户操作方式不对、理解有误、配置错误等，系统行为符合预期。→ 在下方给出操作指导即可，无需改代码。
+- **数据问题**: 数据库/COS/配置中的数据需要修复或补充，代码逻辑本身正确。→ 给出具体修复 SQL/脚本/操作步骤，等人工授权后执行。
+- **功能问题**: 需要修改代码逻辑才能解决。→ 按完整推荐方案输出，触发下游 Agent 实现。
+
+### 3. 去重判断
 完全重复 / 部分相关 / 无重复 + 理由。
 
-### 3. 影响模块（Evidence）
+### 4. 影响模块（Evidence）
 - `path/to/file.ext:line或符号` — 说明
 （至少 2 条来自实际阅读的代码引用）
 
-### 4. 根因（Evidence）
+### 5. 根因（Evidence）
 基于已读代码的数据流/逻辑结论。禁止假设性措辞。
 
-### 5. 推荐方案（唯一）
+### 6. 推荐方案（唯一）
+**若为操作问题**: 给出正确的操作步骤/使用说明，说明为何当前行为是预期的。
+**若为数据问题**: 给出具体修复命令（SQL/脚本/API 调用），标注需人工确认后执行。
+**若为功能问题**:
 1. 具体步骤（有序列表）
 2. **改动文件**: 完整路径列表
 3. **为何是该 surface / 为何不在前端做数据加工**: 一句（最小 effort 依据）
 
-### 6. 执行路径
+### 7. 执行路径
+**操作问题**: 写「无需执行，已在上方给出操作指导」。
+**数据问题**: 写具体执行环境（SSH/API/脚本路径），标注「需人工授权」。
+**功能问题**:
 - **Worktree 目录**: （对应 surface 的路径）
 - **分支**: `issue-{number}/{primary_surface}`
 - **提 PR**: `python tools/smart_pr.py --issue {number} --surface {primary_surface}`
 
-### 7. Scope
+### 8. Scope
 S/M/L + 一句依据
 
-### 8. 三角分工
+### 9. 三角分工
 | 角色 | 本 issue 具体产出 |
 |------|-------------------|
 | Human | 审核上文「推荐方案」；合并后验收 |
@@ -295,7 +308,9 @@ def _is_valid_analysis(text: str, issue_title: str = "") -> bool:
     if not text or len(text.strip()) < 200:
         return False
     lowered = text.lower()
-    if "### 1. 需求概述" not in text and "### 1." not in text:
+    # Accept both Chinese and English numbered section headers (##/### with 1.)
+    has_section = any(marker in text for marker in ("### 1.", "## 1.", "### 1、", "## 1、"))
+    if not has_section:
         return False
     junk_markers = (
         "## progress", "## goal", "## next steps",
@@ -306,16 +321,59 @@ def _is_valid_analysis(text: str, issue_title: str = "") -> bool:
         return False
     if issue_title:
         import re
-        keywords = [w for w in re.split(r'[\s\[\]()（）:：/\-_,，。]+', issue_title) if len(w) >= 2]
-        if keywords and not any(kw.lower() in lowered for kw in keywords):
+        tokens = [w for w in re.split(r'[\s\[\]()（）:：/\-_,，。、；;！!？?]+', issue_title) if len(w) >= 2]
+        # For CJK text that doesn't split well, extract 3-char sliding windows
+        candidates = set()
+        for t in tokens:
+            candidates.add(t.lower())
+            if len(t) > 3:
+                for i in range(len(t) - 2):
+                    candidates.add(t[i:i + 3].lower())
+        if candidates and not any(c in lowered for c in candidates):
             return False
     return True
 
 
 _FINALIZE_PROMPT = (
-    "你已完成代码阅读。现在**只**输出 8 个正式章节 Markdown（从「### 1. 需求概述」开始）。"
-    "禁止 Goal/Progress/Next Steps/思考过程/英文计划块。"
+    "你已完成代码阅读和分析。现在将你的分析结果**严格**按以下 9 章节格式重新输出。\n\n"
+    "格式要求（违反即失败）：\n"
+    "- 第一行必须是 `### 1. 需求概述`\n"
+    "- 依次输出 ### 1. 到 ### 9. 共 9 个章节（含「### 2. 问题分类」必须写明：操作问题/数据问题/功能问题）\n"
+    "- 禁止 Goal/Progress/Next Steps/思考过程/英文计划块\n"
+    "- 禁止在章节前加任何前言或解释\n"
+    "- 直接输出 Markdown，从 `### 1. 需求概述` 开始\n"
 )
+
+
+# ---------------------------------------------------------------------------
+# Issue classification extraction
+# ---------------------------------------------------------------------------
+ISSUE_TYPE_OPERATIONAL = "operational"
+ISSUE_TYPE_DATA = "data"
+ISSUE_TYPE_FEATURE = "feature"
+
+_TYPE_KEYWORDS = {
+    ISSUE_TYPE_OPERATIONAL: ("操作问题",),
+    ISSUE_TYPE_DATA: ("数据问题",),
+    ISSUE_TYPE_FEATURE: ("功能问题",),
+}
+
+
+def extract_issue_type(analysis_text: str) -> str:
+    """Extract issue classification from '### 2. 问题分类' section.
+
+    When §2 is missing entirely, defaults to DATA (requires human approval)
+    rather than FEATURE to avoid unintended auto-execution.
+    """
+    # Find section 2 content
+    m = re.search(r"###\s*2\.\s*问题分类\s*\n([\s\S]*?)(?=\n###\s|\Z)", analysis_text)
+    if not m:
+        return ISSUE_TYPE_DATA  # safe default: require approval when classification missing
+    section = m.group(1).strip().lower()
+    for type_key, keywords in _TYPE_KEYWORDS.items():
+        if any(kw in section for kw in keywords):
+            return type_key
+    return ISSUE_TYPE_FEATURE
 
 
 def _build_inbound_prompt(

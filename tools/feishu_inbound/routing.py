@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 REPO = "AI-MYG/asp"
+
+_GH_BIN = shutil.which("gh") or "/opt/homebrew/bin/gh"
 
 ASSIGNEE_NAMES = {
     "369795172": "袁牧",
@@ -34,7 +37,7 @@ def _extract_executor_from_body(body: str) -> str | None:
 
 def run_gh(*args: str, check: bool = True) -> str:
     result = subprocess.run(
-        ["gh", *args],
+        [_GH_BIN, *args],
         capture_output=True,
         text=True,
         timeout=60,
