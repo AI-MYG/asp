@@ -500,13 +500,27 @@ def _has_linked_pr(number: int, central_number: int | None = None) -> bool:
 _WORKTREE_DIR = _ASP_ROOT / "worktrees"
 
 
+def _prefetch_surface(surface_repo: Path) -> None:
+    """Fetch + prune once per surface before parallel spawning.
+
+    Call this from the main process so subprocesses skip the fetch.
+    """
+    sp.run(
+        ["git", "fetch", "--prune", "origin"],
+        cwd=surface_repo, capture_output=True, timeout=60,
+    )
+
+
 def _create_issue_worktree(
     surface_repo: Path, branch: str, base_branch: str, issue_number: int,
+    *, skip_fetch: bool = False,
 ) -> Path | None:
     """Create a git worktree for the issue branch. Returns worktree path or None."""
     worktree_path = _WORKTREE_DIR / f"issue-{issue_number}"
     try:
-        sp.run(["git", "fetch", "origin"], cwd=surface_repo, check=True, capture_output=True)
+        if not skip_fetch:
+            sp.run(["git", "fetch", "--prune", "origin"],
+                   cwd=surface_repo, check=True, capture_output=True)
 
         if worktree_path.exists():
             sp.run(["git", "worktree", "remove", "--force", str(worktree_path)],
@@ -601,6 +615,7 @@ def execute_issue(
     token: str,
     dry_run: bool,
     skip_pr: bool,
+    skip_fetch: bool = False,
 ) -> dict[str, Any] | None:
     """Execute the recommended plan for one issue. Returns state entry or None."""
     number = issue["number"]
@@ -636,7 +651,9 @@ def execute_issue(
     issue_worktree: Path | None = None
     try:
         # 2. Create isolated worktree for this issue
-        issue_worktree = _create_issue_worktree(surface_repo, spec.branch, base_branch, number)
+        issue_worktree = _create_issue_worktree(
+            surface_repo, spec.branch, base_branch, number, skip_fetch=skip_fetch,
+        )
         if not issue_worktree:
             print(f"  Failed to create worktree for {spec.branch}")
             _add_label(number, _FAILED_LABEL, dry_run=False)
@@ -795,6 +812,8 @@ def main() -> None:
     parser.add_argument("--skip-pr", action="store_true", help="Implement but skip Smart PR")
     parser.add_argument("--force", action="store_true", help="Skip gate checks")
     parser.add_argument("--skip-sync", action="store_true")
+    parser.add_argument("--skip-fetch", action="store_true",
+                        help="Skip git fetch in worktree creation (used by parallel parent)")
     parser.add_argument("--batch", type=int, default=1, help="Max issues per run (default: 1)")
     parser.add_argument("--parallel", action="store_true", help="Process multiple issues in parallel")
     args = parser.parse_args()
@@ -879,6 +898,15 @@ def main() -> None:
 
     # --- Parallel multi-issue via subprocess ---
     if args.parallel and len(candidates) > 1 and not args.dry_run:
+        # Pre-fetch all surfaces once to avoid concurrent git fetch conflicts
+        prefetched: set[str] = set()
+        for _, spec in candidates:
+            surface_repo = _WORKTREE_ROOT / spec.worktree_dir
+            if spec.surface not in prefetched and surface_repo.exists():
+                print(f"  Pre-fetching {spec.surface} ({surface_repo})...")
+                _prefetch_surface(surface_repo)
+                prefetched.add(spec.surface)
+
         max_workers = min(_MAX_PARALLEL, len(candidates))
         print(f"\n--- Parallel: {len(candidates)} issue(s), max {max_workers} concurrent ---")
 
@@ -897,6 +925,7 @@ def main() -> None:
                     sys.executable, str(Path(__file__).resolve()),
                     "--issue", str(number),
                     "--skip-sync",
+                    "--skip-fetch",
                 ]
                 if args.force:
                     cmd.append("--force")
@@ -947,6 +976,7 @@ def main() -> None:
                 token=token,
                 dry_run=args.dry_run,
                 skip_pr=args.skip_pr,
+                skip_fetch=args.skip_fetch,
             )
             if entry:
                 # Atomic per-key merge: safe even when called as parallel subprocess
