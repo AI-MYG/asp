@@ -43,26 +43,20 @@ _STATE_FILE = _ASP_ROOT / "state" / "issue_executor_state.json"
 _STATE_LOCK = _ASP_ROOT / "state" / "issue_executor_state.lock"
 
 
-def _read_state() -> dict[str, Any]:
-    """Read state file with file lock (parallel-safe)."""
-    if not _STATE_FILE.exists():
-        return {}
-    _STATE_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    with open(_STATE_LOCK, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_SH)
-        try:
-            with open(_STATE_FILE, encoding="utf-8") as f:
-                return json.load(f)
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
+def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
+    """Atomic read-merge-write of a single issue key under exclusive lock.
 
-
-def _write_state(state: dict[str, Any]) -> None:
-    """Write state file with exclusive file lock (parallel-safe)."""
+    Safe for parallel subprocesses: each only touches its own key.
+    """
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(_STATE_LOCK, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         try:
+            state: dict[str, Any] = {}
+            if _STATE_FILE.exists():
+                with open(_STATE_FILE, encoding="utf-8") as f:
+                    state = json.load(f)
+            state[issue_key] = entry
             with open(_STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)
         finally:
@@ -268,14 +262,8 @@ def _parse_affected_files(text: str) -> list[str]:
 def parse_analysis_comment(
     comments: list[dict[str, str]],
     issue_number: int,
-    central_number: int | None = None,
 ) -> ExecutionSpec | None:
-    """Parse the Analysis comment into an ExecutionSpec.
-
-    Args:
-        central_number: AI-MYG/asp issue number. When available, used for
-            branch naming so it matches Smart PR's ``--issue`` parameter.
-    """
+    """Parse the Analysis comment into an ExecutionSpec."""
     analysis = _extract_analysis_text(comments)
     if not analysis:
         return None
@@ -292,9 +280,8 @@ def parse_analysis_comment(
     )
 
     surface = _parse_surface_from_execution(exec_section or analysis)
-    # Use central (AI-MYG/asp) number for branch so it aligns with Smart PR
-    branch_number = central_number if central_number else issue_number
-    branch = f"issue-{branch_number}/{surface}"
+    # Always use backend issue number for branch — matches Smart PR --issue
+    branch = f"issue-{issue_number}/{surface}"
     worktree_dir = _SURFACE_WORKTREE.get(surface, f"projects/asp/{surface}")
 
     # Check product ambiguity
@@ -306,7 +293,7 @@ def parse_analysis_comment(
 
     # Parse scope
     scope = "S"
-    scope_match = re.match(r"(S|M|L)", scope_section)
+    scope_match = re.search(r"\b(S|M|L)\b", scope_section)
     if scope_match:
         scope = scope_match.group(1)
 
@@ -500,13 +487,34 @@ def _has_linked_pr(number: int, central_number: int | None = None) -> bool:
 _WORKTREE_DIR = _ASP_ROOT / "worktrees"
 
 
+def _prefetch_surface(surface_repo: Path) -> None:
+    """Fetch + prune once per surface before parallel spawning.
+
+    Call this from the main process so subprocesses skip the fetch.
+    Failures are logged but not fatal — subprocesses will build from
+    whatever local state exists.
+    """
+    try:
+        sp.run(
+            ["git", "fetch", "--prune", "origin"],
+            cwd=surface_repo, capture_output=True, timeout=60,
+        )
+    except sp.TimeoutExpired:
+        print(f"  WARNING: git fetch timed out for {surface_repo}", file=sys.stderr)
+    except sp.SubprocessError as exc:
+        print(f"  WARNING: git fetch failed for {surface_repo}: {exc}", file=sys.stderr)
+
+
 def _create_issue_worktree(
     surface_repo: Path, branch: str, base_branch: str, issue_number: int,
+    *, skip_fetch: bool = False,
 ) -> Path | None:
     """Create a git worktree for the issue branch. Returns worktree path or None."""
     worktree_path = _WORKTREE_DIR / f"issue-{issue_number}"
     try:
-        sp.run(["git", "fetch", "origin"], cwd=surface_repo, check=True, capture_output=True)
+        if not skip_fetch:
+            sp.run(["git", "fetch", "--prune", "origin"],
+                   cwd=surface_repo, check=True, capture_output=True)
 
         if worktree_path.exists():
             sp.run(["git", "worktree", "remove", "--force", str(worktree_path)],
@@ -559,6 +567,7 @@ def _push_branch(worktree_path: Path, branch: str) -> bool:
         return False
 
 
+
 def _has_changes(worktree_path: Path) -> bool:
     """Check if worktree has uncommitted or staged changes."""
     result = sp.run(
@@ -600,6 +609,7 @@ def execute_issue(
     token: str,
     dry_run: bool,
     skip_pr: bool,
+    skip_fetch: bool = False,
 ) -> dict[str, Any] | None:
     """Execute the recommended plan for one issue. Returns state entry or None."""
     number = issue["number"]
@@ -635,7 +645,9 @@ def execute_issue(
     issue_worktree: Path | None = None
     try:
         # 2. Create isolated worktree for this issue
-        issue_worktree = _create_issue_worktree(surface_repo, spec.branch, base_branch, number)
+        issue_worktree = _create_issue_worktree(
+            surface_repo, spec.branch, base_branch, number, skip_fetch=skip_fetch,
+        )
         if not issue_worktree:
             print(f"  Failed to create worktree for {spec.branch}")
             _add_label(number, _FAILED_LABEL, dry_run=False)
@@ -683,16 +695,17 @@ def execute_issue(
                 return None
 
         # 5. Smart PR
-        central_number = _extract_central_number(issue)
-        pr_issue_number = central_number if central_number else number
         pr_result: dict[str, Any] = {}
         if not skip_pr:
-            print(f"  Running Smart PR (--issue {pr_issue_number} --surface {spec.surface})...")
+            print(f"  Running Smart PR (--issue {number} --surface {spec.surface})...")
             smart_pr_path = _ASP_ROOT / "tools" / "smart_pr.py"
+            model_tag = f"{result.executor}/{result.model}" if result.model else result.executor
             cmd = [
                 sys.executable, str(smart_pr_path),
-                "--issue", str(pr_issue_number),
+                "--issue", str(number),
                 "--surface", spec.surface,
+                "--issue-repo", REPO,
+                "--model", model_tag,
             ]
             try:
                 proc = sp.run(
@@ -793,6 +806,8 @@ def main() -> None:
     parser.add_argument("--skip-pr", action="store_true", help="Implement but skip Smart PR")
     parser.add_argument("--force", action="store_true", help="Skip gate checks")
     parser.add_argument("--skip-sync", action="store_true")
+    parser.add_argument("--skip-fetch", action="store_true",
+                        help="Skip git fetch in worktree creation (used by parallel parent)")
     parser.add_argument("--batch", type=int, default=1, help="Max issues per run (default: 1)")
     parser.add_argument("--parallel", action="store_true", help="Process multiple issues in parallel")
     args = parser.parse_args()
@@ -830,8 +845,7 @@ def main() -> None:
             print(f"  #{number}: {reason}")
             continue
 
-        central = _extract_central_number(issue)
-        spec = parse_analysis_comment(comments, number, central_number=central)
+        spec = parse_analysis_comment(comments, number)
         if not spec:
             print(f"  #{number}: could not parse Analysis comment")
             continue
@@ -872,11 +886,17 @@ def main() -> None:
         if report.stale_surfaces:
             print(f"  Stale surfaces: {', '.join(report.stale_surfaces)}")
 
-    # Load state
-    state: dict[str, Any] = _read_state()
-
     # --- Parallel multi-issue via subprocess ---
     if args.parallel and len(candidates) > 1 and not args.dry_run:
+        # Pre-fetch all surfaces once to avoid concurrent git fetch conflicts
+        prefetched: set[str] = set()
+        for _, spec in candidates:
+            surface_repo = _WORKTREE_ROOT / spec.worktree_dir
+            if spec.surface not in prefetched and surface_repo.exists():
+                print(f"  Pre-fetching {spec.surface} ({surface_repo})...")
+                _prefetch_surface(surface_repo)
+                prefetched.add(spec.surface)
+
         max_workers = min(_MAX_PARALLEL, len(candidates))
         print(f"\n--- Parallel: {len(candidates)} issue(s), max {max_workers} concurrent ---")
 
@@ -895,6 +915,7 @@ def main() -> None:
                     sys.executable, str(Path(__file__).resolve()),
                     "--issue", str(number),
                     "--skip-sync",
+                    "--skip-fetch",
                 ]
                 if args.force:
                     cmd.append("--force")
@@ -931,9 +952,6 @@ def main() -> None:
             if active:
                 time.sleep(5)
 
-        # Reload state
-        state = _read_state()
-
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")
 
     else:
@@ -945,6 +963,7 @@ def main() -> None:
                 token=token,
                 dry_run=args.dry_run,
                 skip_pr=args.skip_pr,
+                skip_fetch=args.skip_fetch,
             )
             if entry and entry.get("status") != "dry_run":
                 # Atomic per-key merge: safe even when called as parallel subprocess

@@ -362,13 +362,14 @@ _TYPE_KEYWORDS = {
 def extract_issue_type(analysis_text: str) -> str:
     """Extract issue classification from '### 2. 问题分类' section.
 
-    When §2 is missing entirely, defaults to DATA (requires human approval)
-    rather than FEATURE to avoid unintended auto-execution.
+    When §2 is missing (old template), defaults to FEATURE so the normal
+    difficulty-based gate applies. Only issues explicitly classified as
+    DATA or OPERATIONAL get extra gate requirements.
     """
     # Find section 2 content
     m = re.search(r"###\s*2\.\s*问题分类\s*\n([\s\S]*?)(?=\n###\s|\Z)", analysis_text)
     if not m:
-        return ISSUE_TYPE_DATA  # safe default: require approval when classification missing
+        return ISSUE_TYPE_FEATURE  # old template: fall through to difficulty gate
     section = m.group(1).strip().lower()
     for type_key, keywords in _TYPE_KEYWORDS.items():
         if any(kw in section for kw in keywords):
