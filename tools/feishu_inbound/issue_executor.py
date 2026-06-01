@@ -43,32 +43,6 @@ _STATE_FILE = _ASP_ROOT / "state" / "issue_executor_state.json"
 _STATE_LOCK = _ASP_ROOT / "state" / "issue_executor_state.lock"
 
 
-def _read_state() -> dict[str, Any]:
-    """Read state file with file lock (parallel-safe)."""
-    if not _STATE_FILE.exists():
-        return {}
-    _STATE_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    with open(_STATE_LOCK, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_SH)
-        try:
-            with open(_STATE_FILE, encoding="utf-8") as f:
-                return json.load(f)
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
-
-
-def _write_state(state: dict[str, Any]) -> None:
-    """Write state file with exclusive file lock (parallel-safe)."""
-    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(_STATE_LOCK, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
-            with open(_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
-
-
 def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
     """Atomic read-merge-write of a single issue key under exclusive lock.
 
@@ -497,11 +471,18 @@ def _prefetch_surface(surface_repo: Path) -> None:
     """Fetch + prune once per surface before parallel spawning.
 
     Call this from the main process so subprocesses skip the fetch.
+    Failures are logged but not fatal — subprocesses will build from
+    whatever local state exists.
     """
-    sp.run(
-        ["git", "fetch", "--prune", "origin"],
-        cwd=surface_repo, capture_output=True, timeout=60,
-    )
+    try:
+        sp.run(
+            ["git", "fetch", "--prune", "origin"],
+            cwd=surface_repo, capture_output=True, timeout=60,
+        )
+    except sp.TimeoutExpired:
+        print(f"  WARNING: git fetch timed out for {surface_repo}", file=sys.stderr)
+    except sp.SubprocessError as exc:
+        print(f"  WARNING: git fetch failed for {surface_repo}: {exc}", file=sys.stderr)
 
 
 def _create_issue_worktree(
