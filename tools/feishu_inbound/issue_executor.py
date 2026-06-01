@@ -463,30 +463,55 @@ def _has_linked_pr(number: int, central_number: int | None = None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Git branch helpers
+# Git worktree helpers — each issue gets an isolated worktree so multiple
+# issues on the same surface can execute in parallel without conflicts.
 # ---------------------------------------------------------------------------
-def _create_issue_branch(worktree_path: Path, branch: str, base_branch: str) -> bool:
-    """Create and checkout issue branch in worktree. Returns True on success."""
+_WORKTREE_DIR = _ASP_ROOT / "worktrees"
+
+
+def _create_issue_worktree(
+    surface_repo: Path, branch: str, base_branch: str, issue_number: int,
+) -> Path | None:
+    """Create a git worktree for the issue branch. Returns worktree path or None."""
+    worktree_path = _WORKTREE_DIR / f"issue-{issue_number}"
     try:
-        # Fetch latest
-        sp.run(["git", "fetch", "origin"], cwd=worktree_path, check=True, capture_output=True)
-        # Check if branch already exists on remote
+        sp.run(["git", "fetch", "origin"], cwd=surface_repo, check=True, capture_output=True)
+
+        if worktree_path.exists():
+            sp.run(["git", "worktree", "remove", "--force", str(worktree_path)],
+                   cwd=surface_repo, capture_output=True)
+
         result = sp.run(
             ["git", "branch", "-r", "--list", f"origin/{branch}"],
-            cwd=worktree_path, capture_output=True, text=True,
+            cwd=surface_repo, capture_output=True, text=True,
         )
+
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
         if result.stdout.strip():
-            # Remote branch exists, checkout and track
-            sp.run(["git", "checkout", "-B", branch, f"origin/{branch}"],
-                    cwd=worktree_path, check=True, capture_output=True)
+            sp.run(
+                ["git", "worktree", "add", "-B", branch, str(worktree_path), f"origin/{branch}"],
+                cwd=surface_repo, check=True, capture_output=True, text=True,
+            )
         else:
-            # Create new branch from base
-            sp.run(["git", "checkout", "-B", branch, f"origin/{base_branch}"],
-                    cwd=worktree_path, check=True, capture_output=True)
-        return True
+            sp.run(
+                ["git", "worktree", "add", "-b", branch, str(worktree_path), f"origin/{base_branch}"],
+                cwd=surface_repo, check=True, capture_output=True, text=True,
+            )
+        return worktree_path
     except sp.CalledProcessError as e:
-        print(f"  Error creating branch {branch}: {e.stderr}")
-        return False
+        print(f"  Error creating worktree for {branch}: {e.stderr if hasattr(e, 'stderr') else e}")
+        return None
+
+
+def _remove_issue_worktree(surface_repo: Path, worktree_path: Path) -> None:
+    """Remove the temporary issue worktree."""
+    try:
+        sp.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            cwd=surface_repo, capture_output=True, text=True, timeout=30,
+        )
+    except (sp.CalledProcessError, sp.TimeoutExpired):
+        pass
 
 
 def _push_branch(worktree_path: Path, branch: str) -> bool:
@@ -555,15 +580,15 @@ def execute_issue(
     print(f"  Scope: {spec.scope}, Files: {len(spec.affected_files)}")
     print(f"{'='*60}")
 
-    worktree_path = _WORKTREE_ROOT / spec.worktree_dir
-    if not worktree_path.exists():
-        print(f"  Error: worktree path does not exist: {worktree_path}")
+    surface_repo = _WORKTREE_ROOT / spec.worktree_dir
+    if not surface_repo.exists():
+        print(f"  Error: surface repo does not exist: {surface_repo}")
         return None
 
     base_branch = _SURFACE_BASE_BRANCH.get(spec.surface, "main")
 
     if dry_run:
-        print(f"  [DRY RUN] Would execute in {worktree_path}")
+        print(f"  [DRY RUN] Would create worktree from {surface_repo}")
         print(f"  [DRY RUN] Branch: {spec.branch} from {base_branch}")
         print(f"  [DRY RUN] Affected files: {spec.affected_files}")
         print(f"  [DRY RUN] Plan:\n{spec.plan_text[:500]}")
@@ -574,12 +599,15 @@ def execute_issue(
         print(f"  #{number}: locked (execution-in-progress), skipping")
         return None
 
+    issue_worktree: Path | None = None
     try:
-        # 2. Create issue branch
-        if not _create_issue_branch(worktree_path, spec.branch, base_branch):
-            print(f"  Failed to create branch {spec.branch}")
+        # 2. Create isolated worktree for this issue
+        issue_worktree = _create_issue_worktree(surface_repo, spec.branch, base_branch, number)
+        if not issue_worktree:
+            print(f"  Failed to create worktree for {spec.branch}")
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
+        print(f"  Worktree created: {issue_worktree}")
 
         # 3. Run agent
         if AgentClient is None:
@@ -587,16 +615,16 @@ def execute_issue(
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
 
-        prompt = _build_execution_prompt(issue, spec, str(worktree_path))
+        prompt = _build_execution_prompt(issue, spec, str(issue_worktree))
         timeout = int(os.getenv("AGENT_CLIENT_TIMEOUT", "3600"))
         if spec.scope == "S":
             timeout = min(timeout, 1200)
 
-        print(f"  Running AgentClient (workdir={worktree_path}, timeout={timeout}s)...")
+        print(f"  Running AgentClient (workdir={issue_worktree}, timeout={timeout}s)...")
         result = AgentClient().run(
             prompt,
             intent="execution",
-            workdir=str(worktree_path),
+            workdir=str(issue_worktree),
             timeout_sec=timeout,
         )
 
@@ -608,7 +636,7 @@ def execute_issue(
         print(f"  Agent completed: {result.executor}/{result.model or 'default'} ({result.elapsed_sec}s)")
 
         # 4. Verify changes exist
-        if not _has_commits_ahead(worktree_path, base_branch) and not _has_changes(worktree_path):
+        if not _has_commits_ahead(issue_worktree, base_branch) and not _has_changes(issue_worktree):
             print(f"  Warning: no changes detected after agent execution")
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
@@ -616,7 +644,7 @@ def execute_issue(
         # 4.5. Push branch to remote (required before PR creation)
         if not skip_pr:
             print(f"  Pushing branch {spec.branch} to remote...")
-            if not _push_branch(worktree_path, spec.branch):
+            if not _push_branch(issue_worktree, spec.branch):
                 print(f"  Push failed, not marking as executed")
                 _add_label(number, _FAILED_LABEL, dry_run=False)
                 return None
@@ -636,7 +664,7 @@ def execute_issue(
             try:
                 proc = sp.run(
                     cmd,
-                    cwd=str(worktree_path),
+                    cwd=str(issue_worktree),
                     capture_output=True, text=True, timeout=120,
                 )
                 if proc.returncode == 0:
@@ -674,6 +702,8 @@ def execute_issue(
 
     finally:
         _release_lock(number)
+        if issue_worktree:
+            _remove_issue_worktree(surface_repo, issue_worktree)
 
 
 # ---------------------------------------------------------------------------
