@@ -116,10 +116,40 @@ def _issue_labels(issue: dict[str, Any]) -> list[str]:
     return [lb["name"] for lb in issue.get("labels", [])]
 
 
-def _get_difficulty(issue: dict[str, Any]) -> str:
+def _extract_central_number(issue: dict[str, Any]) -> int | None:
+    """Extract central AI-MYG/asp issue number from [ASP-{N}] in title or body."""
+    title = issue.get("title", "")
+    m = re.search(r"\[ASP-(\d+)\]", title)
+    if m:
+        return int(m.group(1))
+    body = issue.get("body", "")
+    m = re.search(r"AI-MYG/asp#(\d+)", body)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _get_difficulty_from_central(central_number: int) -> str | None:
+    """Fetch difficulty label from central AI-MYG/asp issue."""
+    try:
+        raw = run_gh("issue", "view", str(central_number), "-R", "AI-MYG/asp", "--json", "labels")
+        labels = [lb["name"] for lb in json.loads(raw).get("labels", [])]
+        for lb in labels:
+            if lb.startswith("difficulty-"):
+                return lb.replace("difficulty-", "")
+    except (RuntimeError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def _get_difficulty(issue: dict[str, Any], central_number: int | None = None) -> str:
     for lb in _issue_labels(issue):
         if lb.startswith("difficulty-"):
             return lb.replace("difficulty-", "")
+    if central_number is not None:
+        central_diff = _get_difficulty_from_central(central_number)
+        if central_diff:
+            return central_diff
     return "standard"
 
 
@@ -254,7 +284,8 @@ def needs_execution(
     if not has_analysis_comment(comments):
         return "skip_no_analysis"
 
-    difficulty = _get_difficulty(issue)
+    central_number = _extract_central_number(issue)
+    difficulty = _get_difficulty(issue, central_number)
     if difficulty != "trivial" and _APPROVED_LABEL not in labels:
         return "skip_pending_approval"
 
@@ -373,6 +404,20 @@ def _create_issue_branch(worktree_path: Path, branch: str, base_branch: str) -> 
         return False
 
 
+def _push_branch(worktree_path: Path, branch: str) -> bool:
+    """Push branch to remote. Returns True on success."""
+    try:
+        sp.run(
+            ["git", "push", "-u", "origin", branch],
+            cwd=worktree_path, check=True, capture_output=True, text=True,
+            timeout=120,
+        )
+        return True
+    except (sp.CalledProcessError, sp.TimeoutExpired) as e:
+        print(f"  Error pushing branch {branch}: {e}")
+        return False
+
+
 def _has_changes(worktree_path: Path) -> bool:
     """Check if worktree has uncommitted or staged changes."""
     result = sp.run(
@@ -483,14 +528,24 @@ def execute_issue(
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
 
+        # 4.5. Push branch to remote (required before PR creation)
+        if not skip_pr:
+            print(f"  Pushing branch {spec.branch} to remote...")
+            if not _push_branch(worktree_path, spec.branch):
+                print(f"  Push failed, not marking as executed")
+                _add_label(number, _FAILED_LABEL, dry_run=False)
+                return None
+
         # 5. Smart PR
+        central_number = _extract_central_number(issue)
+        pr_issue_number = central_number if central_number else number
         pr_result: dict[str, Any] = {}
         if not skip_pr:
-            print(f"  Running Smart PR (--issue {number} --surface {spec.surface})...")
+            print(f"  Running Smart PR (--issue {pr_issue_number} --surface {spec.surface})...")
             smart_pr_path = _ASP_ROOT / "tools" / "smart_pr.py"
             cmd = [
                 sys.executable, str(smart_pr_path),
-                "--issue", str(number),
+                "--issue", str(pr_issue_number),
                 "--surface", spec.surface,
             ]
             try:
@@ -645,9 +700,10 @@ def main() -> None:
 
     if args.scan_only:
         for issue, spec in candidates:
-            d = _get_difficulty(issue)
+            cn = _extract_central_number(issue)
+            d = _get_difficulty(issue, cn)
             print(f"  #{issue['number']}: surface={spec.surface} branch={spec.branch} "
-                  f"scope={spec.scope} difficulty={d} files={len(spec.affected_files)}")
+                  f"scope={spec.scope} difficulty={d} central={cn or '?'} files={len(spec.affected_files)}")
         return
 
     if not candidates:
