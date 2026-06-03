@@ -54,6 +54,17 @@ ASP 后端是**两套平行结构**：**模板侧**（`course_level` → `course
 - Issue 收尾：执行完成后走 `skills/workflow_post_implement.md`（PR 合入 + 飞书通知）
 - Debug 分析：`skills/contract_debug_analysis.md` 定义分析 comment 的输出格式
 
+### asp-backend OpenAPI spec 维护（避坑）
+
+asp-backend 改动若涉及路由/Pydantic model（`backend/app/**`），CI（`.github/workflows/api-docs.yml` 的 `export-openapi` job → "Verify spec is up to date"）会重生 `docs/api/openapi.json` 并 `git diff --exit-code` 校验。
+
+**铁律：不要在本机整文件重生 spec。** `requirements.txt` 用 `>=` 不锁版本，且 CI 用 pip cache，等于 CI 的 fastapi/pydantic 被 cache 钉在某个旧版本。本机（尤其新 fastapi/py 版本）跑 `python scripts/export_openapi.py` 会把大量无关端点重新序列化（典型噪声：文件上传字段 `format:binary` ↔ `contentMediaType`、重复 `security` 块），导致 CI verify 失败。
+
+**正确姿势**（按优先级）：
+1. 优先取 CI 失败 run 的 `openapi-json` artifact（CI 在 `failure()` 时上传），直接提交——这就是 CI 期望的产物。
+2. artifact 取不到时，做**增量重建**：以 `origin/<base>` 的 spec 为底，仅注入本次真实新增（新路径对象 / model 新字段），保留基线对所有未改端点的序列化。校验目标：`git diff origin/<base> -- docs/api/openapi.json` **应为纯增量（0 删除）**。
+3. 终极方案才是用与 CI 一致的 py3.11 + pinned 依赖环境整体重生。
+
 ## Memory 系统
 
 - `memory/OBSERVATIONS.md`：Observer 日频写入的 L1 信号（issue 动态、PR 合并、部署事件）
