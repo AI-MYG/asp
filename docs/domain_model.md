@@ -54,7 +54,7 @@ class（班级，course_level_id「基于第一个课程推导」，班主任 = 
 - 真实交付班通过 `sync-from-demo` 从 demo 班继承这份业务定义。
 - 因此：**demo 班 = 业务侧内容的具体体现；普通班 = 学员侧的交付实例。**
 
-> 推论：**unit 是业务维度实体，course 是学员维度实体。** 班主任改的是 unit（业务内容）；course 只是该 unit 在某班的实例化。这一区分决定了「排序属于哪一侧」（见 §五）。
+> 推论：**unit 是业务维度实体，course 是学员维度实体。** 班主任改的是 unit（业务内容）；course 只是该 unit 在某班的实例化。这一区分决定了「排期 / 排序属于哪一侧」（见 §五排期、§六排序）。
 
 ---
 
@@ -89,22 +89,36 @@ class（班级，course_level_id「基于第一个课程推导」，班主任 = 
 
 ---
 
-## 五、排序维度：unit_order 是业务序，course_order 是其投影
+## 五、排期 / 解锁：绝对时间必须按班重锚（业务回避 sync 的**主因**）
 
-排序属于**业务 / 模板维度**，不属于学员 / 交付维度：
+> **这是 issue #72 背后真正严重、且具普遍性的根因。** 排序问题（§六）是次要的。
 
-- `course_unit.unit_order` 是**唯一权威排序（SSOT）**，由业务在 demo / 等级维度定义（`UNIQUE(course_level_id, unit_order)`）。
-- `course.course_order` 是 unit_order 在某班的**投影 / 冗余**，**应当等于对应 unit 的顺序**，不承载独立的业务含义。
-- 一句话：**除非内容本身允许按班差异（见下），否则 `unit_order == course_order`。**
+- `course_media_assignment` 同时存两种解锁表达：`unlock_after_days`（**相对**开课日的天数，可移植）与 `unlock_at`（**绝对**时间戳，与某个 `start_date` 绑定）。
+- **铁律（已与 CTO 核实）：同一 level 的不同班级，`start_date` 必然不同。** demo 班的 `unlock_at` 锚定的是 demo 自己的日历。
+- 因此：**任何继承 / 同步都绝不能把 demo 的绝对 `unlock_at` 原样拷给真实班**——那等于把 demo 的日历强加给一个开课日不同的班，排期必然错位。
+- **正确做法**：`unlock_at` 一律由**目标班 `start_date` + 相对量重新推导**（语义上 `new.unlock_at = target.start_date + unlock_after_days`，或等价地 `demo.unlock_at + (target.start_date − demo.start_date)`）。相对量 `unlock_after_days` 是可移植的 SSOT，绝对时间只是按班派生的投影。
+- **已观测到的污染**：部分历史 sync 出来的班，其 `unlock_at` 与「本班 `start_date` + `unlock_after_days`」对不上（同一行 abs/rel 自相矛盾），说明排期已被错误绝对时间污染。
+- 关联：asp-backend issue #72；决策见 `docs/decisions/0003-schedule-unlock-must-reanchor-to-class-start-date.md`。
+
+---
+
+## 六、排序维度：unit_order 是业务序，course_order 是其按班投影
+
+排序的**权威决策属于业务 / unit 维度**，不属于学员 / 交付维度：
+
+- `course_unit.unit_order` 是排序的**唯一权威 SSOT**，由业务在 demo / 等级维度定义（`UNIQUE(course_level_id, unit_order)`）。
+- `course.course_order` 是 unit_order 的**按班投影 / 冗余**，不承载独立的业务序。
+- **现网实测警告：`course_order` 已与 `unit_order` 漂移**——四阶为 1:1 对齐，但高阶 / 中阶等级中（439 门课里约 363 门）两者不等。因此**读取顺序时一律以 `unit_order` 为权威，不要假设 `course_order == unit_order`**。这种漂移正是 sync 自动 reorder + 缺乏 SSOT 纪律累积出来的症状，而非特性。
 
 ### 为什么后端不应在 sync 里「猜」排序
 
-- 既然顺序由 unit_order 唯一确定，sync 时课程的位置是**已知的**，不需要后端按 `(unit_order, created_at, id)` 做密集重排去「猜」一个 course_order。
-- 自动重排会把 course_order 写成与 unit_order 可能不一致的密集序（1..N）；一旦其它读路径直接读 `course_order`，就会出现「排序错乱」——这正是业务回避 `sync-from-demo` 的根因之一。
-- 正确做法（已拍板）：sync **不写 `course_order`、不做自动 reorder**，统一按 `unit_order ASC NULLS LAST` 排序。`course_order` 字段**保留**，留给未来「sync 后课程层显式重排」的可能，但只能走**显式全量传入**的 reorder 接口，不由 sync 隐式写入。排序的「真实决策」发生在 **demo / unit 维度（业务）**，不应在每个交付班重新发明。
+- 顺序由 unit_order 决定，sync 时课程位置是**已知的**，不需要后端按 `(unit_order, created_at, id)` 做密集重排去「猜」一个 course_order。
+- 自动重排会把 course_order 写成密集序（1..N），可能进一步加剧与 unit_order 的漂移；读路径若直接读 `course_order` 就会「排序错乱」。
+- 正确做法（已拍板）：sync **不写 `course_order`、不做自动 reorder**，统一按 `unit_order ASC NULLS LAST` 排序。`course_order` 字段**保留**，留给未来「sync 后课程层显式重排」的可能。
+- **重排走 propose-confirm**：确需课程层重排时，由接口**按 `unit_order` 给出一份建议顺序**，业务方**确认后**再落库（复用既有「显式全量传入」reorder 契约 `PUT/POST .../classes/{id}/courses/reorder`），**绝不由 sync 隐式改写**。这样既保留人工干预入口，又不会在同步时悄悄改掉业务没预期的顺序。
 - 关联：asp-backend issue #72；决策见 `docs/decisions/0002-course-ordering-is-unit-dimension.md`。
 
-### 唯一的「按班差异」例外：内容，而非排序
+### 唯一的「按班差异」例外：内容，而非排序 / 排期
 
 少数内容**允许不同班有不同版本**——典型是家长端富文本「背景」等：
 
@@ -115,12 +129,13 @@ class（班级，course_level_id「基于第一个课程推导」，班主任 = 
 
 ---
 
-## 六、给 agent 的使用约定
+## 七、给 agent 的使用约定
 
 - 在任何 ASP surface repo 工作、涉及课程 / 班级 / 媒体 / 绘本 / 排期 / 解锁逻辑时，先对照本文确认「这件事属于模板侧还是交付侧」。
 - 不要把班级级的排期 / 解锁信息写进模板内容表（`course_media` / `course_unit`）。
 - 不要为新内容形态发明 1:1 挂 `course` 的捷径；沿用模板 + assignment 范式。
-- **排序属业务 / unit 维度**：`unit_order` 是 SSOT，`course_order` 只是其按班投影（`unit_order == course_order`）。不要在交付班为 course 发明独立顺序，也不要在 sync 里隐式重排 `course_order`。
-- **按班差异只在内容，不在排序**：富文本等可有按班版本（`course_richtext`），但「第几天 / 先后」永远以 `unit_order` 为准。
+- **排期是头等大事**：`unlock_at`（绝对时间）**绝不能跨班原样拷贝**。同 level 不同班 `start_date` 必然不同，绝对时间必须由「目标班 `start_date` + `unlock_after_days`」按班重锚。相对量是 SSOT，绝对量是派生投影。
+- **排序属业务 / unit 维度**：`unit_order` 是 SSOT，`course_order` 只是其按班投影；但**现网二者已漂移（高阶/中阶约 363/439 不等），读取顺序一律以 `unit_order` 为准，不要假设相等**。不要在 sync 里隐式重排 `course_order`；确需重排走「按 unit_order 提议 → 业务确认」的显式全量 reorder 接口。
+- **按班差异只在内容，不在排序 / 排期**：富文本等可有按班版本（`course_richtext`），但「第几天 / 先后 / 何时解锁」永远以 unit 维度 + 本班 `start_date` 为准。
 - 班主任「改课程内容」= 改 unit（业务侧），入口通常是 demo 班；不要把它理解成改某个交付班的私有数据。
 - 本文为 SSOT；各 surface repo 的领域模型小节只是指针，发现冲突以本文为准。

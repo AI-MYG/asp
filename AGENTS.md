@@ -16,9 +16,11 @@ ASP 后端是**两套平行结构**：**模板侧**（`course_level` → `course
 
 核心原则：**「模板内容」与「班级交付」必须分离**——模板挂 `course_unit`/`course_level`，按班级的排期/解锁通过 assignment 层挂 `course` 交付。`course_interactive_book` 当前 1:1 挂 `course` 是建模捷径错误，应沿用 `course_media` 模板+assignment 范式（详见 ADR 0001 与 asp-backend issue #69）。
 
-排序维度：`course_unit.unit_order` 是排序唯一 SSOT，`course.course_order` 只是其按班投影（`unit_order == course_order`；例外仅在按班**内容**如富文本 `course_richtext`，**不在排序**）。demo 班是等级业务内容的标准定义实例，班主任「维护课程内容」本质是维护 unit；sync 不应隐式重排 `course_order`（详见 ADR 0002 与 asp-backend issue #72）。
+排期（头等大事）：同一 level 不同班 `start_date` **必然不同**，`unlock_at`（绝对时间）**绝不能跨班原样拷贝**，必须由「目标班 `start_date` + `unlock_after_days`」按班重锚；相对量是 SSOT，绝对量是派生投影。这是业务回避完整 `sync-from-demo` 的**主因**（详见 ADR 0003 与 asp-backend issue #72）。
 
-完整 SSOT：[`docs/domain_model.md`](docs/domain_model.md)；架构决策：[`docs/decisions/0001-course-interactive-book-as-template-media.md`](docs/decisions/0001-course-interactive-book-as-template-media.md)、[`docs/decisions/0002-course-ordering-is-unit-dimension.md`](docs/decisions/0002-course-ordering-is-unit-dimension.md)。
+排序（次要）：`course_unit.unit_order` 是排序唯一 SSOT，`course.course_order` 只是其按班投影——但**现网二者已漂移（高阶/中阶约 363/439 不等），读取一律以 `unit_order` 为准，勿假设相等**。demo 班是等级业务内容的标准定义实例，班主任「维护课程内容」本质是维护 unit；sync 不应隐式重排 `course_order`，确需重排走「按 unit_order 提议 → 业务确认」（详见 ADR 0002）。
+
+完整 SSOT：[`docs/domain_model.md`](docs/domain_model.md)；架构决策：[`docs/decisions/0001-course-interactive-book-as-template-media.md`](docs/decisions/0001-course-interactive-book-as-template-media.md)、[`docs/decisions/0002-course-ordering-is-unit-dimension.md`](docs/decisions/0002-course-ordering-is-unit-dimension.md)、[`docs/decisions/0003-schedule-unlock-must-reanchor-to-class-start-date.md`](docs/decisions/0003-schedule-unlock-must-reanchor-to-class-start-date.md)。
 
 ## Surface 约定
 
