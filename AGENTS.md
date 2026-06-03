@@ -10,6 +10,16 @@
 4. **项目级 Skill**：ASP 专有的分诊、收尾、通知等执行流程
 5. **自动化工具**：Smart PR、OpenCode 客户端等，团队成员 clone 即可使用
 
+## 领域模型（必读）
+
+ASP 后端是**两套平行结构**：**模板侧**（`course_level` → `course_unit` → `course_media`，与班级无关、可复用）与**班级交付侧**（`class` → `course` → `course_media_assignment`，每班级一份实例），两者经 `course.course_unit_id` 连接。
+
+核心原则：**「模板内容」与「班级交付」必须分离**——模板挂 `course_unit`/`course_level`，按班级的排期/解锁通过 assignment 层挂 `course` 交付。`course_interactive_book` 当前 1:1 挂 `course` 是建模捷径错误，应沿用 `course_media` 模板+assignment 范式（详见 ADR 0001 与 asp-backend issue #69）。
+
+排序维度：`course_unit.unit_order` 是排序唯一 SSOT，`course.course_order` 只是其按班投影（`unit_order == course_order`；例外仅在按班**内容**如富文本 `course_richtext`，**不在排序**）。demo 班是等级业务内容的标准定义实例，班主任「维护课程内容」本质是维护 unit；sync 不应隐式重排 `course_order`（详见 ADR 0002 与 asp-backend issue #72）。
+
+完整 SSOT：[`docs/domain_model.md`](docs/domain_model.md)；架构决策：[`docs/decisions/0001-course-interactive-book-as-template-media.md`](docs/decisions/0001-course-interactive-book-as-template-media.md)、[`docs/decisions/0002-course-ordering-is-unit-dimension.md`](docs/decisions/0002-course-ordering-is-unit-dimension.md)。
+
 ## Surface 约定
 
 6 个 surface repo，配置 SSOT 在 `config/surfaces.yaml`：
@@ -58,12 +68,13 @@ Observer 扫描范围：`AI-MYG/asp*` 所有 repo 的 issue/PR/commit 活动。
 
 ## Tools
 
+- Pipeline C/D 扫描范围：`tools/feishu_inbound/config.yaml` → `pipeline_cd_scan`（改配置即可，见 `skills/workflow_inbound_pipeline.md`）
 - `tools/smart_pr.py`：读取 `config/surfaces.yaml`，自动创建 PR 并指派 reviewer
 - `tools/opencode_client.py`：OpenCode Server HTTP REST 客户端，供自动化脚本调用
 
 ## Secrets
 
-环境变量存 `.env`（gitignored），模板见 `.env.example`。生产凭证通过 macOS Keychain 或 CI secrets 注入。
+本地 macOS：**仅 Keychain**（`rootgrove/<KEY>`，经 `scripts/load_asp_env.sh` / `tools/asp_env.py` 加载）。`.env.example` 为变量名清单；勿提交 `.env`。GitHub Actions / CI 用 repository secrets。
 
 ## Python
 
