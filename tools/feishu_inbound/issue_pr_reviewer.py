@@ -48,7 +48,7 @@ sys.path.insert(0, str(_ASP_ROOT))
 sys.path.insert(0, str(_ASP_ROOT / "scripts"))
 sys.path.insert(0, str(_SCRIPT_DIR))
 
-from routing import run_gh  # noqa: E402
+from routing import run_gh, load_config  # noqa: E402
 from scan_scope import (  # noqa: E402
     describe_scan_scope,
     fetch_assigned_issues,
@@ -88,9 +88,15 @@ _ANALYSIS_MARKER = "## Feishu Inbound Analysis"
 
 _MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_REVIEWERS", "3"))
 
-# Review-model pool — review model MUST differ from the executor model.
-_DEFAULT_REVIEW_MODEL = os.getenv("PIPELINE_E_REVIEW_MODEL", "claude-sonnet-4-20250514")
-_REVIEW_MODEL_POOL = [
+# Review-model config — SSOT is config.yaml → pipeline_e; env overrides the default.
+# The review model MUST differ from the executor model (mutual exclusion).
+_PIPELINE_E_CFG: dict[str, Any] = (load_config() or {}).get("pipeline_e") or {}
+_DEFAULT_REVIEW_MODEL = (
+    os.getenv("PIPELINE_E_REVIEW_MODEL")
+    or _PIPELINE_E_CFG.get("review_model")
+    or "claude-sonnet-4-20250514"
+)
+_REVIEW_MODEL_POOL = _PIPELINE_E_CFG.get("review_model_pool") or [
     "claude-sonnet-4-20250514",
     "glm-5.1",
 ]
@@ -588,8 +594,12 @@ def review_issue(
                 dry_run=False,
             )
         elif verdict == _VERDICT_CHANGES:
-            _remove_label(number, repo, _EXECUTED_LABEL)
+            # Add `review-changes-requested` BEFORE removing `executed` so the
+            # issue always carries at least one meaningful label. D's scan runs
+            # only ~10 min after E's; removing `executed` first would open a
+            # TOCTOU window where D sees neither label and could skip the issue.
             _add_label(number, repo, _REVIEW_CHANGES_LABEL, dry_run=False)
+            _remove_label(number, repo, _EXECUTED_LABEL)
             _post_comment(
                 number, repo,
                 f"{_GATE_REVIEW_MARKER}\n\n"

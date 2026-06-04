@@ -56,6 +56,11 @@ launchd_schedules:
 # falls back to FEISHU_WEBHOOK_URL group message when no open_id is configured.
 pipeline_e:
   review_model: claude-sonnet-4-20250514
+  # Fallback pool when the preferred review_model equals the executor model.
+  # Review model MUST differ from the executor model (mutual exclusion).
+  review_model_pool:
+    - claude-sonnet-4-20250514
+    - glm-5.1
   max_parallel: 3
 
 central_triage:
