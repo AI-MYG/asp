@@ -168,18 +168,10 @@ S/M/L + 一句依据
 
 
 def _load_env() -> None:
-    env_file = _ASP_ROOT / ".env"
-    if not env_file.exists():
-        return
-    with open(env_file, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            k, v = k.strip(), v.strip().strip("'\"")
-            if k and k not in os.environ:
-                os.environ[k] = v
+    sys.path.insert(0, str(_ASP_ROOT / "tools"))
+    from asp_env import load_keychain_env  # noqa: E402
+
+    load_keychain_env()
 
 
 def _gh_headers(token: str) -> dict[str, str]:
@@ -222,18 +214,17 @@ def fetch_feishu_inbound_issues(issue_number: int | None = None) -> list[dict[st
 def fetch_issue_comments(
     token: str,
     issue_number: int,
-    max_comments: int = 30,
-    *,
     repo: str | None = None,
+    max_comments: int = 30,
 ) -> list[dict[str, str]]:
     """Fetch issue comments. ``repo`` defaults to the central REPO but callers
     (Pipeline C/D/E) pass the surface repo for cross-repo execution issues."""
-    owner, repo = (repo or REPO).split("/")
+    owner, repo_name = (repo or REPO).split("/", 1)
     comments: list[dict[str, str]] = []
     page = 1
     while len(comments) < max_comments:
         resp = requests.get(
-            f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments",
+            f"https://api.github.com/repos/{owner}/{repo_name}/issues/{issue_number}/comments",
             headers=_gh_headers(token),
             params={"per_page": min(100, max_comments - len(comments)), "page": page},
             timeout=30,
@@ -254,7 +245,9 @@ def fetch_issue_comments(
     return comments
 
 
-def _issue_comments(issue: dict[str, Any], token: str) -> list[dict[str, str]]:
+def _issue_comments(
+    issue: dict[str, Any], token: str, repo: str | None = None
+) -> list[dict[str, str]]:
     embedded = issue.get("comments")
     if isinstance(embedded, list) and embedded:
         return [
@@ -266,7 +259,7 @@ def _issue_comments(issue: dict[str, Any], token: str) -> list[dict[str, str]]:
             for c in embedded
         ]
     if _comments_count(issue) > 0:
-        return fetch_issue_comments(token, issue["number"])
+        return fetch_issue_comments(token, issue["number"], repo=repo)
     return []
 
 
@@ -443,28 +436,45 @@ def analyze_via_agent_client(
     return result.text
 
 
-def apply_github_updates(number: int, routing: dict[str, Any], dry_run: bool) -> None:
+def apply_github_updates(
+    number: int,
+    routing: dict[str, Any],
+    dry_run: bool,
+    *,
+    repo: str | None = None,
+) -> None:
+    """Update labels/assignee on the central inbound repo (Pipeline B / legacy Layer 2)."""
+    target_repo = repo or _CENTRAL_REPO
     labels = routing["labels"] + ["triaged"]
     assignee = routing.get("assignee")
 
     if dry_run:
-        print(f"  [DRY RUN] labels={labels}, assignee={assignee}")
+        print(f"  [DRY RUN] repo={target_repo} labels={labels}, assignee={assignee}")
         return
 
     for label in labels:
         try:
-            run_gh("issue", "edit", str(number), "-R", REPO, "--add-label", label)
+            run_gh("issue", "edit", str(number), "-R", target_repo, "--add-label", label)
         except RuntimeError as e:
             print(f"  Warning: could not add label '{label}': {e}")
 
     if assignee:
         try:
-            run_gh("issue", "edit", str(number), "-R", REPO, "--add-assignee", assignee)
+            run_gh(
+                "issue", "edit", str(number), "-R", target_repo, "--add-assignee", assignee,
+            )
         except RuntimeError as e:
             print(f"  Warning: could not assign '{assignee}': {e}")
 
 
-def post_analysis_comment(number: int, routing_md: str, analysis_md: str, dry_run: bool) -> None:
+def post_analysis_comment(
+    number: int,
+    routing_md: str,
+    analysis_md: str,
+    dry_run: bool,
+    *,
+    repo: str,
+) -> None:
     body = (
         f"{routing_md}\n\n"
         f"---\n\n"
@@ -476,7 +486,7 @@ def post_analysis_comment(number: int, routing_md: str, analysis_md: str, dry_ru
     if dry_run:
         print(f"\n{'='*60}\n[DRY RUN] Comment for #{number}:\n{'='*60}\n{body[:1500]}...")
         return
-    run_gh("issue", "comment", str(number), "-R", REPO, "--body", body)
+    run_gh("issue", "comment", str(number), "-R", repo, "--body", body)
 
 
 def process_issue(

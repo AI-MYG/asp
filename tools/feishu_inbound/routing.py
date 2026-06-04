@@ -134,14 +134,18 @@ def search_duplicates(title: str) -> list[dict[str, Any]]:
     if not words:
         return []
 
-    raw = run_gh(
-        "issue", "list",
-        "-R", REPO,
-        "--search", " ".join(words),
-        "--state", "open",
-        "--json", "number,title,labels,state",
-        "--limit", "5",
-    )
+    try:
+        raw = run_gh(
+            "issue", "list",
+            "-R", REPO,
+            "--search", " ".join(words),
+            "--state", "open",
+            "--json", "number,title,labels,state",
+            "--limit", "5",
+        )
+    except RuntimeError as e:
+        print(f"  Warning: duplicate search skipped ({e})")
+        return []
     candidates = json.loads(raw)
     return [
         c for c in candidates
