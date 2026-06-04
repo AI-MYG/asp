@@ -56,26 +56,26 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
 
 ## 快速开始
 
-1. 克隆并配置环境变量：
-   ```bash
-   git clone https://github.com/AI-MYG/asp.git
-   cd asp
-   cp .env.example .env
-   # 填入 GitHub Token、Feishu 凭证、OpenCode 配置
-   ```
+1. 克隆本 repo（本地路径常为 `projects/asp-infra`，GitHub 为 `AI-MYG/asp`）。
 
-2. 安装依赖：
+2. **凭证（macOS）**：写入 Keychain 命名空间 `rootgrove/<KEY>`（与 monorepo 共用 `tools/secrets/load_secrets.sh`）。本地 **不需要** `.env`。变量名见 `.env.example`；OpenCode 使用 `OPENCODE_BASE_URL`、`OPENCODE_USERNAME`、`OPENCODE_PASSWORD`。
+
+3. 安装依赖（或使用 monorepo `~/CursorWorks/rootgrove/venv`）：
    ```bash
    pip install pyyaml requests
    ```
 
-3. 本地 Agent 环境（OpenCode Server）：
-   详见 [docs/setup_opencode.md](docs/setup_opencode.md)
+4. 本地 Agent 环境（OpenCode Server）：详见 [docs/setup_opencode.md](docs/setup_opencode.md)
 
-4. 安装定时任务（Observer/Reflector）：
+5. 安装 ASP 定时任务（与 rootgrove observer/reflector **并存**，时间错开且 rootgrove 更早）：
    ```bash
+   bash launchd/disable_rootgrove_feishu_inbound.sh   # 仅关 rootgrove 飞书 B/C，保留 ASP
    bash launchd/install.sh
    ```
+   | Job | rootgrove | ASP (`com.asp.*`) |
+   |-----|-----------|-------------------|
+   | Observer | 每日 08:00 | 每日 22:00 |
+   | Reflector | 周日 09:00 | 周日 10:00 |
 
 5. Smart PR：
    ```bash

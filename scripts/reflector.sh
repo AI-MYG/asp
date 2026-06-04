@@ -15,12 +15,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [[ -f "$REPO_ROOT/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$REPO_ROOT/.env"
-  set +a
-fi
+# shellcheck source=load_asp_env.sh
+source "$SCRIPT_DIR/load_asp_env.sh"
 
 OBS_FILE="$REPO_ROOT/memory/OBSERVATIONS.md"
 MEM_FILE="$REPO_ROOT/memory/MEMORY.md"

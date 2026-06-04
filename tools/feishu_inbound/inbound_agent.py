@@ -217,6 +217,8 @@ def fetch_issue_comments(
     repo: str | None = None,
     max_comments: int = 30,
 ) -> list[dict[str, str]]:
+    """Fetch issue comments. ``repo`` defaults to the central REPO but callers
+    (Pipeline C/D/E) pass the surface repo for cross-repo execution issues."""
     owner, repo_name = (repo or REPO).split("/", 1)
     comments: list[dict[str, str]] = []
     page = 1
