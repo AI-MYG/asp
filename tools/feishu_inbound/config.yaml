@@ -2,6 +2,47 @@
 # Pipeline A: feishu-inbound.yml — Bitable → Issue (cloud)
 # Pipeline B: triage_agent.py — routing + difficulty + triaged + assignee (central Mac)
 # Pipeline C: issue_scanner.py — per-developer difficulty-aware analysis (local Mac)
+# Pipeline D: issue_executor.py — worktree execution + Smart PR (local Mac)
+#
+# ★ 改 Pipeline C/D 扫描范围：只改下方 pipeline_cd_scan，勿改 Python。
+
+# --- Pipeline C/D: Issue scan scope (SSOT) ---
+# mode:
+#   org   — github.org 下所有 repo 里指派给 assignee 的 open issue（当前默认）
+#   repo  — 仅单个 repo
+#   repos — 仅列出的多个 repo
+# assignee: GitHub 用户 ID；运行时仍以环境变量 GITHUB_ASSIGNEE 为准（本机开发者）
+pipeline_cd_scan:
+  mode: org
+  github:
+    org: AI-MYG
+    limit: 100
+    state: open
+  # mode: repo 时使用:
+  # repo: AI-MYG/asp-backend
+  # mode: repos 时使用:
+  # repos:
+  #   - AI-MYG/asp-backend
+  #   - AI-MYG/asp-admin
+  exclude_repos: []
+  # assignee: "369795172"   # 可选默认；本机以 Keychain GITHUB_ASSIGNEE 为准
+
+# --- Pipeline B/C/D: launchd 调度（SSOT，改此处后 bash launchd/install.sh）---
+# hours: all = 0–23 点每天；或 "9-18" 仅工作时间
+# weekday_only: false = 含周末（24/7 与 rootgrove calendar_interval_xml 一致）
+launchd_schedules:
+  feishu_inbound_triage:
+    hours: all
+    minutes: [10, 40]
+    weekday_only: false
+  feishu_inbound_agent:
+    hours: all
+    minutes: [20, 50]
+    weekday_only: false
+  issue_executor:
+    hours: all
+    minutes: [5, 35]
+    weekday_only: false
 
 central_triage:
   host_note: "Marvin MacBook — director machine (B :10/:40 + local C :20/:50)"

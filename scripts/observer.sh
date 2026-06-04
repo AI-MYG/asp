@@ -4,24 +4,16 @@
 # 调用方式:
 #   bash scripts/observer.sh
 #
-# 环境变量 (从 .env 加载):
-#   GITHUB_TOKEN          GitHub API token
-#   OBSERVER_GITHUB_ORG   GitHub org (default: AI-MYG)
-#   OBSERVER_REPOS        Comma-separated repo names (default: asp-backend,asp-app,asp-admin,asp-wecom,asp-websites,asp-canonical,asp)
-#   OPENCODE_HOST/PORT/USER/PASS  OpenCode Server credentials
+# 环境变量: macOS Keychain rootgrove/* (scripts/load_asp_env.sh)
+#   GITHUB_TOKEN, OPENCODE_BASE_URL / OPENCODE_USERNAME / OPENCODE_PASSWORD, etc.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Load .env if present
-if [[ -f "$REPO_ROOT/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$REPO_ROOT/.env"
-  set +a
-fi
+# shellcheck source=load_asp_env.sh
+source "$SCRIPT_DIR/load_asp_env.sh"
 
 ORG="${OBSERVER_GITHUB_ORG:-AI-MYG}"
 REPOS="${OBSERVER_REPOS:-asp-backend,asp-app,asp-admin,asp-wecom,asp-websites,asp-canonical,asp}"

@@ -5,15 +5,17 @@
 # routing (surface/scope/difficulty/assignee), posts triage comment.
 #
 # Scheduled via launchd: com.asp.feishu-inbound-triage
-# Schedule: weekdays at :10 and :40 past each hour (9-18)
+# Schedule: launchd_schedules.feishu_inbound_triage in config.yaml
 set -euo pipefail
 
 export TZ=Asia/Shanghai
 export PYTHONUNBUFFERED=1
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# shellcheck source=load_asp_env.sh
+source "$SCRIPT_DIR/load_asp_env.sh"
 VENV_PYTHON="$REPO_ROOT/venv/bin/python"
 
 # Fallback: use rootgrove venv if ASP venv doesn't exist
@@ -21,26 +23,9 @@ if [ ! -f "$VENV_PYTHON" ]; then
   VENV_PYTHON="${ASP_WORKTREE_ROOT:-$HOME/CursorWorks/rootgrove}/venv/bin/python"
 fi
 
-# Skip weekends
-DOW=$(date +%u)
-if [ "$DOW" -gt 5 ]; then
-  echo "$(date '+%Y-%m-%d %H:%M:%S') Skipping on weekend (day=$DOW)"
-  exit 0
-fi
-
-# Load .env
-ENV_FILE="$REPO_ROOT/.env"
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck source=/dev/null
-  . "$ENV_FILE"
-  set +a
-fi
-
-# Load secrets from macOS Keychain
-LOAD_SECRETS="${ASP_WORKTREE_ROOT:-$HOME/CursorWorks/rootgrove}/tools/secrets/load_secrets.sh"
-# shellcheck source=/dev/null
-[ -f "$LOAD_SECRETS" ] && . "$LOAD_SECRETS"
+# shellcheck source=pipeline_skip_if_weekend.sh
+source "$SCRIPT_DIR/pipeline_skip_if_weekend.sh"
+pipeline_skip_if_weekend triage
 
 cd "$REPO_ROOT"
 
