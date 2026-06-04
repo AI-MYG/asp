@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Pipeline C — unified per-developer issue scanner with difficulty-aware routing.
 
-Scan contract (宽进): open + assignee contains GITHUB_ASSIGNEE — that's it.
+Scan contract (宽进): 范围由 ``tools/feishu_inbound/config.yaml`` → ``pipeline_cd_scan`` 定义；
+默认 ``mode: org`` = AI-MYG 下指派给 GITHUB_ASSIGNEE 的 open issue。
 Skip logic (幂等): already has `## Feishu Inbound Analysis` comment → skip (--force overrides).
 Labels are soft references: difficulty-* / triaged are used if present, degraded gracefully if absent.
 
@@ -15,7 +16,7 @@ Multi-issue parallel: --parallel spawns independent subprocess per issue.
 Usage:
     export GITHUB_ASSIGNEE=369795172
     python tools/feishu_inbound/issue_scanner.py
-    python tools/feishu_inbound/issue_scanner.py --issue 441
+    python tools/feishu_inbound/issue_scanner.py --issue 441 --repo AI-MYG/asp-backend
     python tools/feishu_inbound/issue_scanner.py --scan-only
     python tools/feishu_inbound/issue_scanner.py --batch 5 --parallel
 """
@@ -54,8 +55,14 @@ from routing import (  # noqa: E402
     run_gh,
 )
 
-# issue_scanner operates on surface repos (execution issues), not the central repo.
-REPO = "AI-MYG/asp-backend"
+from scan_scope import (  # noqa: E402
+    describe_scan_scope,
+    fetch_assigned_issues,
+    issue_repo,
+    issue_state_key,
+    load_pipeline_cd_scan,
+    state_entry,
+)
 from sync_worktrees import sync_asp_worktrees, surfaces_to_sync  # noqa: E402
 
 try:
@@ -94,55 +101,10 @@ def _get_difficulty(issue: dict[str, Any]) -> str:
     return "standard"
 
 
-def fetch_assigned_issues(
-    issue_number: int | None = None,
-    *,
-    operator: str,
-) -> list[dict[str, Any]]:
-    """Scan all open issues assigned to operator (宽进: no label requirement)."""
-    if issue_number:
-        raw = run_gh(
-            "issue", "view", str(issue_number),
-            "-R", REPO,
-            "--json",
-            "number,title,body,labels,createdAt,updatedAt,state,url,comments,assignees,author",
-        )
-        issue = json.loads(raw)
-        if issue.get("state", "").upper() != "OPEN":
-            raise ValueError(f"Issue #{issue_number} is not open")
-        return [issue]
-
-    raw = run_gh(
-        "issue", "list",
-        "-R", REPO,
-        "--assignee", operator,
-        "--state", "open",
-        "--json",
-        "number,title,body,labels,createdAt,updatedAt,state,url,comments,assignees,author",
-        "--limit", "50",
-    )
-    issues = json.loads(raw)
-    raw_all = run_gh(
-        "issue", "list",
-        "-R", REPO,
-        "--state", "open",
-        "--json",
-        "number,title,body,labels,createdAt,updatedAt,state,url,comments,assignees,author",
-        "--limit", "100",
-    )
-    all_issues = json.loads(raw_all)
-    seen = {i["number"] for i in issues}
-    for i in all_issues:
-        if i["number"] not in seen and operator in {a.get("login", "") for a in i.get("assignees", [])}:
-            issues.append(i)
-    return issues
-
-
 def _should_process(issue: dict[str, Any], state: dict[str, Any], force: bool) -> bool:
     if force:
         return True
-    key = str(issue["number"])
-    entry = state.get(key)
+    entry = state_entry(state, issue)
     if not entry or not entry.get("last_analyzed_at"):
         return True
     issue_updated = issue.get("updatedAt") or issue.get("updated_at", "")
@@ -163,18 +125,19 @@ def analyze_issue(
 ) -> dict[str, Any] | None:
     """Run analysis on a single issue. Returns state entry or None on failure."""
     number = issue["number"]
+    repo = issue_repo(issue)
     title = issue.get("title", "")
     difficulty = _get_difficulty(issue)
     routing_profile = DIFFICULTY_ROUTING_PROFILES.get(difficulty, "analysis")
 
     print(f"\n{'='*60}")
-    print(f"Issue #{number}: {title}")
+    print(f"Issue #{number} ({repo}): {title}")
     print(f"  Difficulty: {difficulty} → profile: {routing_profile}")
     print(f"{'='*60}")
 
     comments: list[dict[str, str]] = []
     if _comments_count(issue) > 0:
-        comments = fetch_issue_comments(token, number)
+        comments = fetch_issue_comments(token, number, repo=repo)
 
     routing = preflight_routing(issue, config)
     routing_md = format_routing_section(routing)
@@ -223,15 +186,15 @@ def analyze_issue(
             print(f"  HARD STOP: final output still invalid after finalize — NOT posting comment")
             try:
                 run_gh(
-                    "issue", "edit", str(number), "-R", REPO,
+                    "issue", "edit", str(number), "-R", repo,
                     "--add-label", "analysis-failed",
                 )
             except RuntimeError:
                 pass
             return None
 
-    post_analysis_comment(number, routing_md, analysis_md, dry_run=dry_run)
-    _add_analyzed_label(number, dry_run)
+    post_analysis_comment(number, routing_md, analysis_md, dry_run=dry_run, repo=repo)
+    _add_analyzed_label(number, repo, dry_run)
 
     issue_type = extract_issue_type(analysis_md)
     print(f"  Issue type: {issue_type} (from comment, Pipeline D reads this directly)")
@@ -244,6 +207,7 @@ def analyze_issue(
         "last_state": issue.get("state", "OPEN").lower(),
         "title": title,
         "url": issue.get("url", ""),
+        "repo": repo,
         "surfaces": routing["surfaces"],
         "difficulty": difficulty,
         "routing_profile": routing_profile,
@@ -257,19 +221,19 @@ _LOCK_LABEL = "analysis-in-progress"
 _ANALYZED_LABEL = "analyzed"
 
 
-def _add_analyzed_label(number: int, dry_run: bool) -> None:
+def _add_analyzed_label(number: int, repo: str, dry_run: bool) -> None:
     """Idempotently add the 'analyzed' label (Pipeline C completion marker)."""
     if dry_run:
-        print(f"  [DRY RUN] would add label '{_ANALYZED_LABEL}' to #{number}")
+        print(f"  [DRY RUN] would add label '{_ANALYZED_LABEL}' to {repo}#{number}")
         return
     try:
-        raw = run_gh("issue", "view", str(number), "-R", REPO, "--json", "labels")
+        raw = run_gh("issue", "view", str(number), "-R", repo, "--json", "labels")
         labels = [lb["name"] for lb in json.loads(raw).get("labels", [])]
         if _ANALYZED_LABEL not in labels:
-            run_gh("issue", "edit", str(number), "-R", REPO, "--add-label", _ANALYZED_LABEL)
-            print(f"  Added label '{_ANALYZED_LABEL}' to #{number}")
+            run_gh("issue", "edit", str(number), "-R", repo, "--add-label", _ANALYZED_LABEL)
+            print(f"  Added label '{_ANALYZED_LABEL}' to {repo}#{number}")
     except RuntimeError as e:
-        print(f"  Warning: could not add label '{_ANALYZED_LABEL}' to #{number}: {e}")
+        print(f"  Warning: could not add label '{_ANALYZED_LABEL}' to {repo}#{number}: {e}")
 
 
 def needs_analysis(
@@ -295,27 +259,27 @@ def needs_analysis(
     return "analyze"
 
 
-def _acquire_lock(number: int, dry_run: bool) -> bool:
+def _acquire_lock(number: int, repo: str, dry_run: bool) -> bool:
     """Add analysis-in-progress label as distributed lock. Returns False if already held."""
     if dry_run:
         return True
     try:
         raw = run_gh(
-            "issue", "view", str(number), "-R", REPO,
+            "issue", "view", str(number), "-R", repo,
             "--json", "labels",
         )
         labels = [lb["name"] for lb in json.loads(raw).get("labels", [])]
         if _LOCK_LABEL in labels:
             return False
-        run_gh("issue", "edit", str(number), "-R", REPO, "--add-label", _LOCK_LABEL)
+        run_gh("issue", "edit", str(number), "-R", repo, "--add-label", _LOCK_LABEL)
         return True
     except RuntimeError:
         return False
 
 
-def _release_lock(number: int) -> None:
+def _release_lock(number: int, repo: str) -> None:
     try:
-        run_gh("issue", "edit", str(number), "-R", REPO, "--remove-label", _LOCK_LABEL)
+        run_gh("issue", "edit", str(number), "-R", repo, "--remove-label", _LOCK_LABEL)
     except RuntimeError:
         pass
 
@@ -325,6 +289,10 @@ def main() -> None:
         description="Unified issue scanner (Pipeline C) — difficulty-aware agent routing"
     )
     parser.add_argument("--issue", type=int, help="Analyze one issue")
+    parser.add_argument(
+        "--repo",
+        help="owner/repo (required if issue number exists in multiple repos)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--scan-only", action="store_true")
     parser.add_argument("--skip-email", action="store_true")
@@ -343,8 +311,16 @@ def main() -> None:
     operator = _operator()
     config = load_config()
 
+    scan_cfg = load_pipeline_cd_scan(config)
+
     try:
-        issues = fetch_assigned_issues(args.issue, operator=operator)
+        issues = fetch_assigned_issues(
+            operator,
+            config=config,
+            scan=scan_cfg,
+            issue_number=args.issue,
+            repo=args.repo,
+        )
     except (RuntimeError, ValueError) as e:
         print(f"Error: {e}")
         sys.exit(1)
@@ -361,36 +337,43 @@ def main() -> None:
     candidates: list[dict[str, Any]] = []
     for issue in issues:
         number = issue["number"]
+        repo = issue_repo(issue)
         comments: list[dict[str, str]] = []
         if _comments_count(issue) > 0:
             try:
-                comments = fetch_issue_comments(token, number)
+                comments = fetch_issue_comments(token, number, repo=repo)
             except Exception:
                 pass
         action = needs_analysis(issue, comments, args.force)
         if action == "skip":
-            print(f"  #{number}: already analyzed (comment + label present)")
+            print(f"  {repo}#{number}: already analyzed (comment + label present)")
             continue
         if action == "repair_label":
-            print(f"  #{number}: analysis comment present, repairing missing 'analyzed' label")
-            _add_analyzed_label(number, args.dry_run)
+            print(f"  {repo}#{number}: analysis comment present, repairing missing 'analyzed' label")
+            _add_analyzed_label(number, repo, args.dry_run)
             continue
         if _should_process(issue, state, args.force):
             candidates.append(issue)
         else:
-            print(f"  #{number}: unchanged since last run")
+            print(f"  {repo}#{number}: unchanged since last run")
 
     if not args.issue and not args.scan_only:
         candidates = candidates[: args.batch]
 
-    print(f"Scanner queue ({operator}): {len(issues)} open assigned, {len(candidates)} need analysis")
+    print(
+        f"Scanner queue ({operator}, scope={describe_scan_scope(scan_cfg, operator)}): "
+        f"{len(issues)} open assigned, {len(candidates)} need analysis"
+    )
 
     if args.scan_only:
         for issue in candidates:
             r = preflight_routing(issue, config)
             d = _get_difficulty(issue)
-            print(f"  #{issue['number']}: surfaces={r['surfaces']} scope={r['scope']} "
-                  f"difficulty={d} profile={DIFFICULTY_ROUTING_PROFILES.get(d, 'analysis')}")
+            repo = issue_repo(issue)
+            print(
+                f"  {repo}#{issue['number']}: surfaces={r['surfaces']} scope={r['scope']} "
+                f"difficulty={d} profile={DIFFICULTY_ROUTING_PROFILES.get(d, 'analysis')}"
+            )
         return
 
     if not candidates:
@@ -423,7 +406,7 @@ def main() -> None:
         max_workers = min(_MAX_PARALLEL_AGENTS, len(parallelizable))
         print(f"\n--- Parallel: {len(parallelizable)} issue(s), max {max_workers} concurrent ---")
 
-        active: dict[int, sp.Popen] = {}
+        active: dict[str, sp.Popen] = {}
         pending = list(parallelizable)
         processed = 0
 
@@ -434,19 +417,23 @@ def main() -> None:
             while pending and len(active) < max_workers:
                 issue = pending.pop(0)
                 number = issue["number"]
-                if not _acquire_lock(number, dry_run=False):
-                    print(f"  #{number}: locked (analysis-in-progress), skipping")
+                repo = issue_repo(issue)
+                job_key = issue_state_key(issue)
+                if not _acquire_lock(number, repo, dry_run=False):
+                    print(f"  {repo}#{number}: locked (analysis-in-progress), skipping")
                     continue
                 cmd = [
                     sys.executable, str(Path(__file__).resolve()),
                     "--issue", str(number),
+                    "--repo", repo,
                     "--skip-sync", "--skip-email",
                 ]
                 if args.force:
                     cmd.append("--force")
-                log_path = log_dir / f"issue_scanner_{number}.log"
+                log_slug = repo.replace("/", "_")
+                log_path = log_dir / f"issue_scanner_{log_slug}_{number}.log"
                 log_file = open(log_path, "w")
-                print(f"  Spawning agent for #{number} (log: {log_path.name})")
+                print(f"  Spawning agent for {repo}#{number} (log: {log_path.name})")
                 proc = sp.Popen(
                     cmd,
                     stdout=log_file,
@@ -454,24 +441,26 @@ def main() -> None:
                     cwd=str(_ASP_ROOT),
                     env={**os.environ, "GITHUB_TOKEN": token, "GITHUB_ASSIGNEE": operator},
                 )
-                active[number] = proc
+                active[job_key] = proc
                 proc._log_file = log_file  # type: ignore[attr-defined]
+                proc._lock_repo = repo  # type: ignore[attr-defined]
+                proc._lock_number = number  # type: ignore[attr-defined]
 
-            done_numbers: list[int] = []
-            for number, proc in active.items():
+            done_keys: list[str] = []
+            for job_key, proc in active.items():
                 ret = proc.poll()
                 if ret is not None:
                     proc._log_file.close()  # type: ignore[attr-defined]
-                    _release_lock(number)
+                    _release_lock(proc._lock_number, proc._lock_repo)  # type: ignore[attr-defined]
                     if ret == 0:
-                        print(f"  #{number}: completed (exit 0)")
+                        print(f"  {job_key}: completed (exit 0)")
                         processed += 1
                     else:
-                        print(f"  #{number}: failed (exit {ret})")
-                    done_numbers.append(number)
+                        print(f"  {job_key}: failed (exit {ret})")
+                    done_keys.append(job_key)
 
-            for n in done_numbers:
-                del active[n]
+            for k in done_keys:
+                del active[k]
 
             if active:
                 time.sleep(5)
@@ -486,12 +475,13 @@ def main() -> None:
                 stale_surfaces=stale_surfaces or None,
             )
             if entry:
-                state[str(issue["number"])] = entry
+                state[issue_state_key(issue)] = entry
                 processed += 1
 
-        if _STATE_FILE.exists():
-            with open(_STATE_FILE, encoding="utf-8") as f:
-                state = json.load(f)
+        if not args.dry_run:
+            _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
 
         print(f"\nDone. Parallel processed {processed} issue(s) for {operator}.")
 
@@ -508,7 +498,7 @@ def main() -> None:
                 stale_surfaces=stale_surfaces or None,
             )
             if entry:
-                state[str(issue["number"])] = entry
+                state[issue_state_key(issue)] = entry
                 processed += 1
 
         if not args.dry_run:

@@ -10,23 +10,17 @@ from __future__ import annotations
 
 import base64
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import requests
 
-# Load .env from repo root
-REPO_ROOT = Path(__file__).resolve().parents[1]
-_env_file = REPO_ROOT / ".env"
-if _env_file.is_file():
-    for _line in _env_file.read_text(encoding="utf-8").splitlines():
-        _line = _line.strip()
-        if not _line or _line.startswith("#") or "=" not in _line:
-            continue
-        _k, _v = _line.split("=", 1)
-        if _k not in os.environ:
-            os.environ[_k] = _v.strip()
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from asp_env import load_keychain_env  # noqa: E402
+
+load_keychain_env()
 
 MESSAGE_TIMEOUT = int(os.getenv("OPENCODE_MESSAGE_TIMEOUT", "3600"))
 
@@ -44,7 +38,7 @@ class OpenCodeClient:
 
         if not self.password:
             raise ValueError(
-                "OPENCODE_PASSWORD not set. Configure in .env or pass explicitly."
+                "OPENCODE_PASSWORD not set. Add rootgrove/OPENCODE_PASSWORD to Keychain or pass explicitly."
             )
 
         credentials = f"{self.username}:{self.password}"

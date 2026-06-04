@@ -23,17 +23,15 @@ opencode server --port 4096 --host localhost
 
 ## 环境变量
 
-在 `.env` 中配置：
+写入 macOS Keychain（与 rootgrove 共用命名空间）：
 
 ```bash
-OPENCODE_HOST=localhost
-OPENCODE_PORT=4096
-OPENCODE_USER=user
-OPENCODE_PASS=changeme
-OPENCODE_MODEL_CHAIN=claude-sonnet-4-20250514,anthropic:claude-sonnet-4-20250514
+security add-generic-password -s "rootgrove/OPENCODE_BASE_URL" -a rootgrove -w "http://127.0.0.1:4096" -U
+security add-generic-password -s "rootgrove/OPENCODE_USERNAME" -a rootgrove -w "opencode" -U
+security add-generic-password -s "rootgrove/OPENCODE_PASSWORD" -a rootgrove -w "<your-server-password>" -U
 ```
 
-`MODEL_CHAIN` 支持 fallback：第一个模型不可用时自动切换到下一个。
+`observer.sh` / `reflector.sh` 会自动映射为 `OPENCODE_HOST`/`PORT`/`USER`/`PASS`。可选：`OPENCODE_MODEL_CHAIN`（见 `.env.example`）。
 
 ## API 调用方式
 
@@ -74,6 +72,6 @@ ssh -L 4096:localhost:4096 user@your-mac-ip
 ## 故障排查
 
 - **连接拒绝**: 检查 server 是否在运行 (`lsof -i :4096`)
-- **认证失败**: 确认 `.env` 中的 USER/PASS 与 server 启动参数一致
+- **认证失败**: 确认 Keychain 中 `OPENCODE_USERNAME` / `OPENCODE_PASSWORD` 与 server 一致
 - **模型不可用**: 检查 API key 配置，或切换 MODEL_CHAIN 中的 fallback 模型
 - **超时**: OpenCode 默认 120s 超时，复杂分析可能需要调大

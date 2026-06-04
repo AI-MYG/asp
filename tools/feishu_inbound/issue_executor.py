@@ -7,7 +7,8 @@ spawns AgentClient in the target surface worktree to implement the
 recommended plan from the Analysis comment, then runs Smart PR.
 
 Scan contract:
-  open + assignee=GITHUB_ASSIGNEE + 'analyzed' label + gate passed + no 'executed'/'execution-in-progress'
+  范围见 ``config.yaml`` → ``pipeline_cd_scan``（与 Pipeline C 相同）；
+  在此基础上要求 analyzed + gate + 非 executed。
 
 Gate:
   difficulty-trivial  → auto-execute (no human approval needed)
@@ -62,26 +63,6 @@ def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
         finally:
             fcntl.flock(lf, fcntl.LOCK_UN)
 
-
-def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
-    """Atomic read-merge-write of a single issue key under exclusive lock.
-
-    Safe for parallel subprocesses: each only touches its own key.
-    """
-    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(_STATE_LOCK, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
-            state: dict[str, Any] = {}
-            if _STATE_FILE.exists():
-                with open(_STATE_FILE, encoding="utf-8") as f:
-                    state = json.load(f)
-            state[issue_key] = entry
-            with open(_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
-
 _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
 ).resolve()
@@ -91,10 +72,9 @@ sys.path.insert(0, str(_SCRIPT_DIR))
 
 from routing import (  # noqa: E402
     DIFFICULTY_ROUTING_PROFILES,
+    load_config,
     run_gh,
 )
-
-REPO = "AI-MYG/asp-backend"
 
 from inbound_agent import (  # noqa: E402
     ISSUE_TYPE_DATA,
@@ -104,6 +84,13 @@ from inbound_agent import (  # noqa: E402
     extract_issue_type,
     fetch_issue_comments,
     has_analysis_comment,
+)
+from scan_scope import (  # noqa: E402
+    describe_scan_scope,
+    fetch_assigned_issues,
+    issue_repo,
+    issue_state_key,
+    load_pipeline_cd_scan,
 )
 from sync_worktrees import sync_asp_worktrees, surfaces_to_sync  # noqa: E402
 
@@ -120,6 +107,8 @@ _APPROVED_LABEL = "approved-to-execute"
 _LOCK_LABEL = "execution-in-progress"
 _EXECUTED_LABEL = "executed"
 _FAILED_LABEL = "execution-failed"
+_REVIEW_CHANGES_LABEL = "review-changes-requested"
+_GATE_REVIEW_MARKER = "## Pipeline E Gate Review"
 _MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_EXECUTORS", "3"))
 
 # ---------------------------------------------------------------------------
@@ -210,6 +199,16 @@ def _extract_analysis_text(comments: list[dict[str, str]]) -> str | None:
     return None
 
 
+def _extract_gate_review_feedback(comments: list[dict[str, str]]) -> str | None:
+    """Latest Pipeline E gate review feedback for executor revision rounds."""
+    for c in reversed(comments):
+        body = c.get("body", "")
+        if _GATE_REVIEW_MARKER in body:
+            idx = body.index(_GATE_REVIEW_MARKER)
+            return body[idx:].strip()
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Parse Analysis comment → ExecutionSpec
 # ---------------------------------------------------------------------------
@@ -289,7 +288,9 @@ def parse_analysis_comment(
     m = re.search(r"###\s*待确认[（(]产品[）)](.+?)(?=###|$)", analysis, re.DOTALL)
     if m:
         ambiguity_section = m.group(1).strip()
-    has_ambiguity = bool(ambiguity_section) and ambiguity_section != "无"
+    ambiguity_body = re.sub(r"\n?---.*$", "", ambiguity_section, flags=re.DOTALL).strip()
+    # "无", "无。", "无。..." (with explanation after) are all "no ambiguity"
+    has_ambiguity = bool(ambiguity_body) and not ambiguity_body.startswith("无")
 
     # Parse scope
     scope = "S"
@@ -325,7 +326,7 @@ def needs_execution(
 
     Returns:
       'execute'               — ready to execute
-      'skip'                  — already executed
+      'skip'                  — already executed (handed off to Pipeline E)
       'skip_locked'           — another process is executing
       'skip_no_analysis'      — no Analysis comment found
       'skip_pending_approval' — non-trivial, awaiting approved-to-execute label
@@ -354,11 +355,11 @@ def needs_execution(
     if issue_type == ISSUE_TYPE_DATA and _APPROVED_LABEL not in labels:
         return "skip_data_pending_approval"
 
-    number = issue.get("number")
+    # Awaiting-review gate: the ``executed`` short-circuit above already skips
+    # issues handed off to Pipeline E. When E removes ``executed`` (revision
+    # round) D re-enters here and re-executes on the same branch/PR, reading the
+    # ``## Pipeline E Gate Review`` feedback via _build_execution_prompt.
     central_number = _extract_central_number(issue)
-    if number and _has_linked_pr(number, central_number):
-        return "skip_has_pr"
-
     difficulty = _get_difficulty(issue, central_number)
     if difficulty != "trivial" and _APPROVED_LABEL not in labels:
         return "skip_pending_approval"
@@ -388,6 +389,8 @@ _EXECUTION_PROMPT = """你是 ASP {surface} 开发者 Agent。下面是一个**�
 
 {analysis}
 
+{gate_review_section}
+
 ## 工作环境
 
 - 工作目录: `{workdir}`
@@ -401,13 +404,24 @@ def _build_execution_prompt(
     issue: dict[str, Any],
     spec: ExecutionSpec,
     workdir: str,
+    *,
+    gate_review_feedback: str | None = None,
 ) -> str:
+    gate_section = ""
+    if gate_review_feedback:
+        gate_section = (
+            "## Pipeline E 审查反馈（必须处理）\n\n"
+            "上一轮 PR 未通过 gate review。请**优先**按下列反馈修改，"
+            "不要扩大范围。\n\n"
+            f"{gate_review_feedback}\n"
+        )
     return _EXECUTION_PROMPT.format(
         surface=spec.surface,
         number=issue["number"],
         title=issue.get("title", ""),
         body=issue.get("body", "")[:3000],
         analysis=spec.analysis_full_text,
+        gate_review_section=gate_section,
         workdir=workdir,
         branch=spec.branch,
     )
@@ -416,68 +430,79 @@ def _build_execution_prompt(
 # ---------------------------------------------------------------------------
 # Label helpers
 # ---------------------------------------------------------------------------
-def _add_label(number: int, label: str, dry_run: bool) -> None:
+def _add_label(number: int, repo: str, label: str, dry_run: bool) -> None:
     if dry_run:
-        print(f"  [DRY RUN] would add label '{label}' to #{number}")
+        print(f"  [DRY RUN] would add label '{label}' to {repo}#{number}")
         return
     try:
-        run_gh("issue", "edit", str(number), "-R", REPO, "--add-label", label)
+        run_gh("issue", "edit", str(number), "-R", repo, "--add-label", label)
     except RuntimeError as e:
-        print(f"  Warning: could not add label '{label}' to #{number}: {e}")
+        print(f"  Warning: could not add label '{label}' to {repo}#{number}: {e}")
 
 
-def _remove_label(number: int, label: str) -> None:
+def _remove_label(number: int, repo: str, label: str) -> None:
     try:
-        run_gh("issue", "edit", str(number), "-R", REPO, "--remove-label", label)
+        run_gh("issue", "edit", str(number), "-R", repo, "--remove-label", label)
     except RuntimeError:
         pass
 
 
-def _acquire_lock(number: int, dry_run: bool) -> bool:
+def _acquire_lock(number: int, repo: str, dry_run: bool) -> bool:
     if dry_run:
         return True
     try:
-        raw = run_gh("issue", "view", str(number), "-R", REPO, "--json", "labels")
+        raw = run_gh("issue", "view", str(number), "-R", repo, "--json", "labels")
         labels = [lb["name"] for lb in json.loads(raw).get("labels", [])]
         if _LOCK_LABEL in labels:
             return False
-        run_gh("issue", "edit", str(number), "-R", REPO, "--add-label", _LOCK_LABEL)
+        run_gh("issue", "edit", str(number), "-R", repo, "--add-label", _LOCK_LABEL)
         return True
     except RuntimeError:
         return False
 
 
-def _release_lock(number: int) -> None:
-    _remove_label(number, _LOCK_LABEL)
+def _release_lock(number: int, repo: str) -> None:
+    _remove_label(number, repo, _LOCK_LABEL)
 
 
-def _has_linked_pr(number: int, central_number: int | None = None) -> bool:
-    """Check if there's an open or merged PR for this issue.
+def _find_linked_pr(
+    repo: str,
+    number: int,
+    central_number: int | None = None,
+    *,
+    state: str = "open",
+) -> dict[str, Any] | None:
+    """Find PR for issue branch ``issue-{N}/…`` (open by default).
 
-    Searches branch pattern ``issue-{N}/`` for both the backend issue number
-    and the central AI-MYG/asp number (if available) to catch PRs created
-    with either numbering scheme.
+    Lists PRs and filters by head ref prefix. ``gh pr list --search`` does NOT
+    match branch names reliably (slashes aren't indexed as search terms), so we
+    must enumerate and prefix-match ``headRefName`` ourselves.
     """
     numbers_to_check = [number]
     if central_number and central_number != number:
         numbers_to_check.append(central_number)
 
+    try:
+        raw = run_gh(
+            "pr", "list", "-R", repo,
+            "--state", state,
+            "--limit", "100",
+            "--json", "number,state,headRefName,url,baseRefName",
+        )
+        prs = json.loads(raw)
+    except (RuntimeError, json.JSONDecodeError):
+        return None
+
     for n in numbers_to_check:
-        try:
-            raw = run_gh(
-                "pr", "list", "-R", REPO,
-                "--search", f"issue-{n}/",
-                "--state", "all",
-                "--json", "number,state,headRefName",
-            )
-            prs = json.loads(raw)
-            for pr in prs:
-                branch = pr.get("headRefName", "")
-                if branch.startswith(f"issue-{n}/"):
-                    return True
-        except (RuntimeError, json.JSONDecodeError):
-            pass
-    return False
+        prefix = f"issue-{n}/"
+        for pr in prs:
+            if pr.get("headRefName", "").startswith(prefix):
+                return pr
+    return None
+
+
+def _has_linked_pr(repo: str, number: int, central_number: int | None = None) -> bool:
+    return _find_linked_pr(repo, number, central_number) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +627,16 @@ _SURFACE_BASE_BRANCH: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Core execution
 # ---------------------------------------------------------------------------
+def _surface_github_repo(surface: str) -> str:
+    try:
+        import yaml
+
+        cfg = yaml.safe_load((_ASP_ROOT / "config" / "surfaces.yaml").read_text(encoding="utf-8"))
+        return (cfg.get("surfaces") or {}).get(surface, {}).get("repo", "")
+    except Exception:
+        return ""
+
+
 def execute_issue(
     issue: dict[str, Any],
     spec: ExecutionSpec,
@@ -613,10 +648,11 @@ def execute_issue(
 ) -> dict[str, Any] | None:
     """Execute the recommended plan for one issue. Returns state entry or None."""
     number = issue["number"]
+    gh_repo = issue_repo(issue)
     title = issue.get("title", "")
 
     print(f"\n{'='*60}")
-    print(f"Executing #{number}: {title}")
+    print(f"Executing {gh_repo}#{number}: {title}")
     print(f"  Surface: {spec.surface}, Branch: {spec.branch}")
     print(f"  Scope: {spec.scope}, Files: {len(spec.affected_files)}")
     print(f"{'='*60}")
@@ -638,8 +674,8 @@ def execute_issue(
         return {"status": "dry_run"}
 
     # 1. Acquire lock
-    if not _acquire_lock(number, dry_run=False):
-        print(f"  #{number}: locked (execution-in-progress), skipping")
+    if not _acquire_lock(number, gh_repo, dry_run=False):
+        print(f"  {gh_repo}#{number}: locked (execution-in-progress), skipping")
         return None
 
     issue_worktree: Path | None = None
@@ -650,17 +686,25 @@ def execute_issue(
         )
         if not issue_worktree:
             print(f"  Failed to create worktree for {spec.branch}")
-            _add_label(number, _FAILED_LABEL, dry_run=False)
+            _add_label(number, gh_repo, _FAILED_LABEL, dry_run=False)
             return None
         print(f"  Worktree created: {issue_worktree}")
 
         # 3. Run agent
         if AgentClient is None:
             print("  Error: AgentClient not importable")
-            _add_label(number, _FAILED_LABEL, dry_run=False)
+            _add_label(number, gh_repo, _FAILED_LABEL, dry_run=False)
             return None
 
-        prompt = _build_execution_prompt(issue, spec, str(issue_worktree))
+        comments: list[dict[str, str]] = []
+        try:
+            comments = fetch_issue_comments(token, number, repo=gh_repo)
+        except Exception:
+            pass
+        gate_feedback = _extract_gate_review_feedback(comments)
+        prompt = _build_execution_prompt(
+            issue, spec, str(issue_worktree), gate_review_feedback=gate_feedback,
+        )
         timeout = int(os.getenv("AGENT_CLIENT_TIMEOUT", "3600"))
         if spec.scope == "S":
             timeout = min(timeout, 1200)
@@ -675,7 +719,7 @@ def execute_issue(
 
         if result.status != "success":
             print(f"  Agent execution failed: {result.error}")
-            _add_label(number, _FAILED_LABEL, dry_run=False)
+            _add_label(number, gh_repo, _FAILED_LABEL, dry_run=False)
             return None
 
         print(f"  Agent completed: {result.executor}/{result.model or 'default'} ({result.elapsed_sec}s)")
@@ -683,7 +727,7 @@ def execute_issue(
         # 4. Verify changes exist
         if not _has_commits_ahead(issue_worktree, base_branch) and not _has_changes(issue_worktree):
             print(f"  Warning: no changes detected after agent execution")
-            _add_label(number, _FAILED_LABEL, dry_run=False)
+            _add_label(number, gh_repo, _FAILED_LABEL, dry_run=False)
             return None
 
         # 4.5. Push branch to remote (required before PR creation)
@@ -691,54 +735,68 @@ def execute_issue(
             print(f"  Pushing branch {spec.branch} to remote...")
             if not _push_branch(issue_worktree, spec.branch):
                 print(f"  Push failed, not marking as executed")
-                _add_label(number, _FAILED_LABEL, dry_run=False)
+                _add_label(number, gh_repo, _FAILED_LABEL, dry_run=False)
                 return None
 
-        # 5. Smart PR
+        # 5. Smart PR (skip create if open PR already exists — revision round)
         pr_result: dict[str, Any] = {}
+        central_number = _extract_central_number(issue)
+        pr_repo = _surface_github_repo(spec.surface)
+        existing_pr = _find_linked_pr(pr_repo, number, central_number) if pr_repo else None
         if not skip_pr:
-            print(f"  Running Smart PR (--issue {number} --surface {spec.surface})...")
-            smart_pr_path = _ASP_ROOT / "tools" / "smart_pr.py"
-            model_tag = f"{result.executor}/{result.model}" if result.model else result.executor
-            cmd = [
-                sys.executable, str(smart_pr_path),
-                "--issue", str(number),
-                "--surface", spec.surface,
-                "--issue-repo", REPO,
-                "--model", model_tag,
-                "--handback-requester",
-            ]
-            try:
-                proc = sp.run(
-                    cmd,
-                    cwd=str(issue_worktree),
-                    capture_output=True, text=True, timeout=120,
-                )
-                if proc.returncode == 0:
-                    try:
-                        pr_result = json.loads(proc.stdout)
-                    except json.JSONDecodeError:
-                        pr_result = {"raw_output": proc.stdout[:500]}
-                    print(f"  PR created: {pr_result.get('pr_url', 'unknown')}")
-                else:
-                    print(f"  Smart PR failed (exit {proc.returncode}): {proc.stderr[:300]}")
-                    _add_label(number, _FAILED_LABEL, dry_run=False)
+            if existing_pr:
+                pr_result = {
+                    "pr_url": existing_pr.get("url", ""),
+                    "number": existing_pr.get("number"),
+                    "reused": True,
+                }
+                print(f"  Open PR exists: {pr_result.get('pr_url')} (skip Smart PR create)")
+            else:
+                print(f"  Running Smart PR (--issue {number} --surface {spec.surface})...")
+                smart_pr_path = _ASP_ROOT / "tools" / "smart_pr.py"
+                model_tag = f"{result.executor}/{result.model}" if result.model else result.executor
+                cmd = [
+                    sys.executable, str(smart_pr_path),
+                    "--issue", str(number),
+                    "--surface", spec.surface,
+                    "--issue-repo", gh_repo,
+                    "--model", model_tag,
+                    "--handback-requester",
+                ]
+                try:
+                    proc = sp.run(
+                        cmd,
+                        cwd=str(issue_worktree),
+                        capture_output=True, text=True, timeout=120,
+                    )
+                    if proc.returncode == 0:
+                        try:
+                            pr_result = json.loads(proc.stdout)
+                        except json.JSONDecodeError:
+                            pr_result = {"raw_output": proc.stdout[:500]}
+                        print(f"  PR created: {pr_result.get('pr_url', 'unknown')}")
+                    else:
+                        print(f"  Smart PR failed (exit {proc.returncode}): {proc.stderr[:300]}")
+                        _add_label(number, gh_repo, _FAILED_LABEL, dry_run=False)
+                        return None
+                except sp.TimeoutExpired:
+                    print(f"  Smart PR timed out")
+                    _add_label(number, gh_repo, _FAILED_LABEL, dry_run=False)
                     return None
-            except sp.TimeoutExpired:
-                print(f"  Smart PR timed out")
-                _add_label(number, _FAILED_LABEL, dry_run=False)
-                return None
+            if _REVIEW_CHANGES_LABEL in _issue_labels(issue):
+                _remove_label(number, gh_repo, _REVIEW_CHANGES_LABEL)
         else:
             print(f"  Skipping PR (--skip-pr)")
 
         # 6. Mark success
-        _add_label(number, _EXECUTED_LABEL, dry_run=False)
-        print(f"  #{number}: execution complete")
+        _add_label(number, gh_repo, _EXECUTED_LABEL, dry_run=False)
+        print(f"  {gh_repo}#{number}: execution complete")
 
         now_iso = datetime.now(timezone.utc).isoformat()
         return {
             "last_executed_at": now_iso,
             "title": title,
+            "repo": gh_repo,
             "surface": spec.surface,
             "branch": spec.branch,
             "scope": spec.scope,
@@ -748,43 +806,9 @@ def execute_issue(
         }
 
     finally:
-        _release_lock(number)
+        _release_lock(number, gh_repo)
         if issue_worktree:
             _remove_issue_worktree(surface_repo, issue_worktree)
-
-
-# ---------------------------------------------------------------------------
-# Issue fetching (reuse from issue_scanner pattern)
-# ---------------------------------------------------------------------------
-def fetch_assigned_issues(
-    issue_number: int | None = None,
-    *,
-    operator: str,
-) -> list[dict[str, Any]]:
-    """Fetch open issues assigned to operator."""
-    if issue_number:
-        raw = run_gh(
-            "issue", "view", str(issue_number),
-            "-R", REPO,
-            "--json",
-            "number,title,body,labels,createdAt,updatedAt,state,url,comments,assignees,author",
-        )
-        issue = json.loads(raw)
-        if issue.get("state", "").upper() != "OPEN":
-            raise ValueError(f"Issue #{issue_number} is not open")
-        return [issue]
-
-    raw = run_gh(
-        "issue", "list",
-        "-R", REPO,
-        "--assignee", operator,
-        "--state", "open",
-        "--label", _ANALYZED_LABEL,
-        "--json",
-        "number,title,body,labels,createdAt,updatedAt,state,url,comments,assignees,author",
-        "--limit", "50",
-    )
-    return json.loads(raw)
 
 
 def _comments_count(issue: dict[str, Any]) -> int:
@@ -802,6 +826,10 @@ def main() -> None:
         description="Pipeline D — auto-execute analyzed issues via worktree agents + Smart PR"
     )
     parser.add_argument("--issue", type=int, help="Execute one issue")
+    parser.add_argument(
+        "--repo",
+        help="owner/repo (required if issue number exists in multiple repos)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--scan-only", action="store_true", help="List eligible issues without executing")
     parser.add_argument("--skip-pr", action="store_true", help="Implement but skip Smart PR")
@@ -820,9 +848,17 @@ def main() -> None:
         sys.exit(1)
 
     operator = _operator()
+    config = load_config()
+    scan_cfg = load_pipeline_cd_scan(config)
 
     try:
-        issues = fetch_assigned_issues(args.issue, operator=operator)
+        issues = fetch_assigned_issues(
+            operator,
+            config=config,
+            scan=scan_cfg,
+            issue_number=args.issue,
+            repo=args.repo,
+        )
     except (RuntimeError, ValueError) as e:
         print(f"Error: {e}")
         sys.exit(1)
@@ -833,26 +869,27 @@ def main() -> None:
     candidates: list[tuple[dict[str, Any], ExecutionSpec]] = []
     for issue in issues:
         number = issue["number"]
+        repo = issue_repo(issue)
         comments: list[dict[str, str]] = []
         if _comments_count(issue) > 0:
             try:
-                comments = fetch_issue_comments(token, number)
+                comments = fetch_issue_comments(token, number, repo=repo)
             except Exception:
                 pass
 
         action = needs_execution(issue, comments, args.force)
         if action != "execute":
             reason = action.replace("skip_", "").replace("skip", "already executed")
-            print(f"  #{number}: {reason}")
+            print(f"  {repo}#{number}: {reason}")
             continue
 
         spec = parse_analysis_comment(comments, number)
         if not spec:
-            print(f"  #{number}: could not parse Analysis comment")
+            print(f"  {repo}#{number}: could not parse Analysis comment")
             continue
 
         if spec.has_product_ambiguity and not args.force:
-            print(f"  #{number}: product ambiguity unresolved, skipping")
+            print(f"  {repo}#{number}: product ambiguity unresolved, skipping")
             continue
 
         candidates.append((issue, spec))
@@ -860,14 +897,20 @@ def main() -> None:
     if not args.issue and not args.scan_only:
         candidates = candidates[: args.batch]
 
-    print(f"\nExecutor queue ({operator}): {len(issues)} analyzed, {len(candidates)} ready to execute")
+    print(
+        f"\nExecutor queue ({operator}, scope={describe_scan_scope(scan_cfg, operator)}): "
+        f"{len(issues)} open assigned, {len(candidates)} ready to execute"
+    )
 
     if args.scan_only:
         for issue, spec in candidates:
             cn = _extract_central_number(issue)
             d = _get_difficulty(issue, cn)
-            print(f"  #{issue['number']}: surface={spec.surface} branch={spec.branch} "
-                  f"scope={spec.scope} difficulty={d} central={cn or '?'} files={len(spec.affected_files)}")
+            repo = issue_repo(issue)
+            print(
+                f"  {repo}#{issue['number']}: surface={spec.surface} branch={spec.branch} "
+                f"scope={spec.scope} difficulty={d} central={cn or '?'} files={len(spec.affected_files)}"
+            )
         return
 
     if not candidates:
@@ -901,7 +944,7 @@ def main() -> None:
         max_workers = min(_MAX_PARALLEL, len(candidates))
         print(f"\n--- Parallel: {len(candidates)} issue(s), max {max_workers} concurrent ---")
 
-        active: dict[int, sp.Popen] = {}
+        active: dict[str, sp.Popen] = {}
         pending = list(candidates)
         processed = 0
 
@@ -912,9 +955,12 @@ def main() -> None:
             while pending and len(active) < max_workers:
                 issue, spec = pending.pop(0)
                 number = issue["number"]
+                repo = issue_repo(issue)
+                job_key = issue_state_key(issue)
                 cmd = [
                     sys.executable, str(Path(__file__).resolve()),
                     "--issue", str(number),
+                    "--repo", repo,
                     "--skip-sync",
                     "--skip-fetch",
                 ]
@@ -922,9 +968,10 @@ def main() -> None:
                     cmd.append("--force")
                 if args.skip_pr:
                     cmd.append("--skip-pr")
-                log_path = log_dir / f"issue_executor_{number}.log"
+                log_slug = repo.replace("/", "_")
+                log_path = log_dir / f"issue_executor_{log_slug}_{number}.log"
                 log_file = open(log_path, "w")
-                print(f"  Spawning executor for #{number} (log: {log_path.name})")
+                print(f"  Spawning executor for {repo}#{number} (log: {log_path.name})")
                 proc = sp.Popen(
                     cmd,
                     stdout=log_file,
@@ -932,23 +979,23 @@ def main() -> None:
                     cwd=str(_ASP_ROOT),
                     env={**os.environ, "GITHUB_TOKEN": token, "GITHUB_ASSIGNEE": operator},
                 )
-                active[number] = proc
+                active[job_key] = proc
                 proc._log_file = log_file  # type: ignore[attr-defined]
 
-            done_numbers: list[int] = []
-            for number, proc in active.items():
+            done_keys: list[str] = []
+            for job_key, proc in active.items():
                 ret = proc.poll()
                 if ret is not None:
                     proc._log_file.close()  # type: ignore[attr-defined]
                     if ret == 0:
-                        print(f"  #{number}: executed (exit 0)")
+                        print(f"  {job_key}: executed (exit 0)")
                         processed += 1
                     else:
-                        print(f"  #{number}: failed (exit {ret})")
-                    done_numbers.append(number)
+                        print(f"  {job_key}: failed (exit {ret})")
+                    done_keys.append(job_key)
 
-            for n in done_numbers:
-                del active[n]
+            for k in done_keys:
+                del active[k]
 
             if active:
                 time.sleep(5)
@@ -968,7 +1015,7 @@ def main() -> None:
             )
             if entry and entry.get("status") != "dry_run":
                 # Atomic per-key merge: safe even when called as parallel subprocess
-                _merge_state_entry(str(issue["number"]), entry)
+                _merge_state_entry(issue_state_key(issue), entry)
                 processed += 1
 
         print(f"\nDone. Executed {processed} issue(s) for {operator}.")

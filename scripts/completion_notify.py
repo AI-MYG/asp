@@ -31,17 +31,12 @@ CONFIG_DIR = REPO_ROOT / "config"
 CENTRAL_REPO = "AI-MYG/asp"
 FEISHU_BASE_URL = "https://open.feishu.cn/open-apis"
 
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+from asp_env import load_keychain_env  # noqa: E402
+
 
 def load_env() -> None:
-    env_file = REPO_ROOT / ".env"
-    if env_file.is_file():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            if key not in os.environ:
-                os.environ[key] = value.strip()
+    load_keychain_env()
 
 
 def load_notifications_config() -> dict[str, Any]:
