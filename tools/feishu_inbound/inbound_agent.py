@@ -219,8 +219,16 @@ def fetch_feishu_inbound_issues(issue_number: int | None = None) -> list[dict[st
     return json.loads(raw)
 
 
-def fetch_issue_comments(token: str, issue_number: int, max_comments: int = 30) -> list[dict[str, str]]:
-    owner, repo = REPO.split("/")
+def fetch_issue_comments(
+    token: str,
+    issue_number: int,
+    max_comments: int = 30,
+    *,
+    repo: str | None = None,
+) -> list[dict[str, str]]:
+    """Fetch issue comments. ``repo`` defaults to the central REPO but callers
+    (Pipeline C/D/E) pass the surface repo for cross-repo execution issues."""
+    owner, repo = (repo or REPO).split("/")
     comments: list[dict[str, str]] = []
     page = 1
     while len(comments) < max_comments:

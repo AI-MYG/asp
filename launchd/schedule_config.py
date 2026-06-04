@@ -15,9 +15,11 @@ _JOB_ALIASES = {
     "triage": "feishu_inbound_triage",
     "agent": "feishu_inbound_agent",
     "executor": "issue_executor",
+    "reviewer": "issue_pr_reviewer",
     "feishu_inbound_triage": "feishu_inbound_triage",
     "feishu_inbound_agent": "feishu_inbound_agent",
     "issue_executor": "issue_executor",
+    "issue_pr_reviewer": "issue_pr_reviewer",
 }
 
 
@@ -78,9 +80,9 @@ def summary(job: str) -> str:
 def main() -> None:
     if len(sys.argv) < 3:
         print(
-            "Usage: schedule_config.py calendar-xml <triage|agent|executor>\n"
-            "       schedule_config.py weekday-only <triage|agent|executor>\n"
-            "       schedule_config.py summary <triage|agent|executor>",
+            "Usage: schedule_config.py calendar-xml <triage|agent|executor|reviewer>\n"
+            "       schedule_config.py weekday-only <triage|agent|executor|reviewer>\n"
+            "       schedule_config.py summary <triage|agent|executor|reviewer>",
             file=sys.stderr,
         )
         sys.exit(2)

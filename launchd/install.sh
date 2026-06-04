@@ -22,8 +22,9 @@ REFLECTOR_LABEL="com.asp.reflector"
 TRIAGE_LABEL="com.asp.feishu-inbound-triage"
 AGENT_LABEL="com.asp.feishu-inbound-agent"
 EXECUTOR_LABEL="com.asp.issue-executor"
+REVIEWER_LABEL="com.asp.issue-pr-reviewer"
 
-ALL_LABELS=("$OBSERVER_LABEL" "$REFLECTOR_LABEL" "$TRIAGE_LABEL" "$AGENT_LABEL" "$EXECUTOR_LABEL")
+ALL_LABELS=("$OBSERVER_LABEL" "$REFLECTOR_LABEL" "$TRIAGE_LABEL" "$AGENT_LABEL" "$EXECUTOR_LABEL" "$REVIEWER_LABEL")
 
 uninstall() {
   echo "Uninstalling ASP launchd jobs..."
@@ -52,6 +53,7 @@ fi
 TRIAGE_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml triage)
 AGENT_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml agent)
 EXECUTOR_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml executor)
+REVIEWER_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml reviewer)
 
 PATH_ENV='  <key>EnvironmentVariables</key>
   <dict>
@@ -201,6 +203,32 @@ $PATH_ENV
 </plist>
 EOF
 
+# --- Pipeline E: Issue PR reviewer (gate review) ---
+cat > "$LAUNCH_AGENTS/$REVIEWER_LABEL.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$REVIEWER_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$REPO_ROOT/scripts/run_issue_pr_reviewer.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+$REVIEWER_SCHEDULE
+  <key>StandardOutPath</key>
+  <string>$REPO_ROOT/logs/issue-pr-reviewer.log</string>
+  <key>StandardErrorPath</key>
+  <string>$REPO_ROOT/logs/issue-pr-reviewer.err</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO_ROOT</string>
+$PATH_ENV
+</dict>
+</plist>
+EOF
+
 # Create logs directory
 mkdir -p "$REPO_ROOT/logs"
 
@@ -225,4 +253,5 @@ echo "  Reflector: Sunday at 10:00      ($REFLECTOR_LABEL)"
 echo "  Triage:    $("$VENV_PYTHON" "$SCHEDULE_PY" summary triage) ($TRIAGE_LABEL)"
 echo "  Agent:     $("$VENV_PYTHON" "$SCHEDULE_PY" summary agent) ($AGENT_LABEL)"
 echo "  Executor:  $("$VENV_PYTHON" "$SCHEDULE_PY" summary executor) ($EXECUTOR_LABEL)"
+echo "  Reviewer:  $("$VENV_PYTHON" "$SCHEDULE_PY" summary reviewer) ($REVIEWER_LABEL)"
 echo "  Logs: $REPO_ROOT/logs/"

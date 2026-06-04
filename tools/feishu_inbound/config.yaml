@@ -43,6 +43,20 @@ launchd_schedules:
     hours: all
     minutes: [5, 35]
     weekday_only: false
+  # Pipeline E — gate review, runs after executor (:05/:35) so PRs exist first.
+  issue_pr_reviewer:
+    hours: all
+    minutes: [15, 45]
+    weekday_only: false
+
+# --- Pipeline E: gate review (review only, never edits code / merges) ---
+# review_model MUST differ from the executor model (recorded in PR body
+# "**Implemented by**: `opencode/<model>`"); env PIPELINE_E_REVIEW_MODEL overrides.
+# Feishu DM target: env PIPELINE_E_FEISHU_OPEN_ID (Keychain) > team_registry marvin;
+# falls back to FEISHU_WEBHOOK_URL group message when no open_id is configured.
+pipeline_e:
+  review_model: claude-sonnet-4-20250514
+  max_parallel: 3
 
 central_triage:
   host_note: "Marvin MacBook — director machine (B :10/:40 + local C :20/:50)"

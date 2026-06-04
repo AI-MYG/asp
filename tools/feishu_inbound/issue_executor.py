@@ -326,7 +326,7 @@ def needs_execution(
 
     Returns:
       'execute'               — ready to execute
-      'skip'                  — already executed
+      'skip'                  — already executed (handed off to Pipeline E)
       'skip_locked'           — another process is executing
       'skip_no_analysis'      — no Analysis comment found
       'skip_pending_approval' — non-trivial, awaiting approved-to-execute label
@@ -355,17 +355,11 @@ def needs_execution(
     if issue_type == ISSUE_TYPE_DATA and _APPROVED_LABEL not in labels:
         return "skip_data_pending_approval"
 
-    number = issue.get("number")
+    # Awaiting-review gate: the ``executed`` short-circuit above already skips
+    # issues handed off to Pipeline E. When E removes ``executed`` (revision
+    # round) D re-enters here and re-executes on the same branch/PR, reading the
+    # ``## Pipeline E Gate Review`` feedback via _build_execution_prompt.
     central_number = _extract_central_number(issue)
-    # Only skip when executed + PR exists (awaiting Pipeline E). If E removed
-    # ``executed``, allow D to revise on the same branch/PR.
-    if (
-        _EXECUTED_LABEL in labels
-        and number
-        and _find_linked_pr(issue_repo(issue), number, central_number)
-    ):
-        return "skip_awaiting_review"
-
     difficulty = _get_difficulty(issue, central_number)
     if difficulty != "trivial" and _APPROVED_LABEL not in labels:
         return "skip_pending_approval"
@@ -478,26 +472,32 @@ def _find_linked_pr(
     *,
     state: str = "open",
 ) -> dict[str, Any] | None:
-    """Find PR for issue branch ``issue-{N}/…`` (open by default)."""
+    """Find PR for issue branch ``issue-{N}/…`` (open by default).
+
+    Lists PRs and filters by head ref prefix. ``gh pr list --search`` does NOT
+    match branch names reliably (slashes aren't indexed as search terms), so we
+    must enumerate and prefix-match ``headRefName`` ourselves.
+    """
     numbers_to_check = [number]
     if central_number and central_number != number:
         numbers_to_check.append(central_number)
 
+    try:
+        raw = run_gh(
+            "pr", "list", "-R", repo,
+            "--state", state,
+            "--limit", "100",
+            "--json", "number,state,headRefName,url,baseRefName",
+        )
+        prs = json.loads(raw)
+    except (RuntimeError, json.JSONDecodeError):
+        return None
+
     for n in numbers_to_check:
-        try:
-            raw = run_gh(
-                "pr", "list", "-R", repo,
-                "--search", f"issue-{n}/",
-                "--state", state,
-                "--json", "number,state,headRefName,url,baseRefName",
-            )
-            prs = json.loads(raw)
-            for pr in prs:
-                branch = pr.get("headRefName", "")
-                if branch.startswith(f"issue-{n}/"):
-                    return pr
-        except (RuntimeError, json.JSONDecodeError):
-            pass
+        prefix = f"issue-{n}/"
+        for pr in prs:
+            if pr.get("headRefName", "").startswith(prefix):
+                return pr
     return None
 
 
