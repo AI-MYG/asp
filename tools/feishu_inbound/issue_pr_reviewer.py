@@ -2,8 +2,9 @@
 """Pipeline E — gate review of executed surface PRs (review only, never edits code).
 
 Scans surface execution issues that have the ``executed`` label and an open
-linked PR but no ``review-dev-pass`` yet, runs a gate review with a model that
-differs from the executor model, and applies a state machine:
+linked PR but no ``review-dev-pass`` yet, delegates gate review to an **agent
+platform different from Pipeline D** (e.g. Cursor Composer 2.5 when D used
+OpenCode), and applies a state machine:
 
   PASS    → add ``review-dev-pass`` (keep ``executed``); never merge; Feishu DM.
   CHANGES → remove ``executed`` + add ``review-changes-requested``; post a
@@ -33,6 +34,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -66,11 +68,6 @@ from issue_executor import (  # noqa: E402
 )
 
 try:
-    from tools.agent_client import AgentClient
-except ImportError:
-    AgentClient = None  # type: ignore[misc, assignment]
-
-try:
     import completion_notify as _notify
 except ImportError:
     _notify = None  # type: ignore[assignment]
@@ -88,18 +85,92 @@ _ANALYSIS_MARKER = "## Feishu Inbound Analysis"
 
 _MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_REVIEWERS", "3"))
 
-# Review-model config — SSOT is config.yaml → pipeline_e; env overrides the default.
-# The review model MUST differ from the executor model (mutual exclusion).
+# Review route config — SSOT: config.yaml → pipeline_e; env overrides.
+# Mutual exclusion = different *executor platform* than Pipeline D (not OpenCode model swap).
 _PIPELINE_E_CFG: dict[str, Any] = (load_config() or {}).get("pipeline_e") or {}
-_DEFAULT_REVIEW_MODEL = (
-    os.getenv("PIPELINE_E_REVIEW_MODEL")
-    or _PIPELINE_E_CFG.get("review_model")
-    or "claude-sonnet-4-20250514"
-)
-_REVIEW_MODEL_POOL = _PIPELINE_E_CFG.get("review_model_pool") or [
-    "claude-sonnet-4-20250514",
-    "glm-5.1",
-]
+
+_GateReviewClient: type[Any] | None = None
+
+
+@dataclass(frozen=True)
+class ReviewRoute:
+    executor: str
+    model: str
+
+
+_CURSOR_EXECUTORS = frozenset({"cursor_sdk", "cursor_agent"})
+
+
+def _same_agent_platform(a: str, b: str) -> bool:
+    """Treat cursor_sdk and cursor_agent as one platform for mutual exclusion."""
+    al, bl = a.lower(), b.lower()
+    if al in _CURSOR_EXECUTORS and bl in _CURSOR_EXECUTORS:
+        return True
+    return al == bl
+
+
+def _load_gate_review_client() -> type[Any] | None:
+    """Rootgrove multi-executor AgentClient (Cursor / Claude / OpenCode).
+
+    asp-infra has its own ``tools/`` package (OpenCode-only). Prefer rootgrove on
+    ``sys.path`` and drop a cached asp-infra ``tools`` module before importing.
+    """
+    global _GateReviewClient
+    if _GateReviewClient is not None:
+        return _GateReviewClient
+
+    root_str = str(_WORKTREE_ROOT)
+    if root_str in sys.path:
+        sys.path.remove(root_str)
+    sys.path.insert(0, root_str)
+
+    # issue_executor / inbound_agent import asp-infra ``tools.agent_client`` first,
+    # which pins ``tools`` to asp-infra (no agent_clients). Drop before rootgrove import.
+    for key in list(sys.modules):
+        if key == "tools" or key.startswith("tools."):
+            del sys.modules[key]
+
+    try:
+        from tools.agent_clients.client import AgentClient as cls
+
+        _GateReviewClient = cls
+        return cls
+    except Exception as exc:
+        if os.getenv("PIPELINE_E_DEBUG_IMPORT"):
+            print(f"  DEBUG: gate review AgentClient import failed: {exc}", file=sys.stderr)
+        return None
+
+
+def _default_review_route() -> ReviewRoute:
+    return ReviewRoute(
+        os.getenv("PIPELINE_E_REVIEW_EXECUTOR")
+        or _PIPELINE_E_CFG.get("review_executor")
+        or "cursor_sdk",
+        os.getenv("PIPELINE_E_REVIEW_MODEL")
+        or _PIPELINE_E_CFG.get("review_model")
+        or "composer-2.5",
+    )
+
+
+def _review_route_pool() -> list[ReviewRoute]:
+    pool_cfg = _PIPELINE_E_CFG.get("review_route_pool")
+    if pool_cfg:
+        return [
+            ReviewRoute(str(r["executor"]), str(r["model"]))
+            for r in pool_cfg
+            if r.get("executor") and r.get("model")
+        ]
+    preferred = _default_review_route()
+    fallbacks = [
+        ReviewRoute("cursor_agent", "composer-2.5"),
+        ReviewRoute("claude_code", "claude-sonnet-4"),
+        ReviewRoute("opencode", "glm-5.1"),
+    ]
+    out = [preferred]
+    for route in fallbacks:
+        if route not in out:
+            out.append(route)
+    return out
 
 # Label specs created on demand (gh add-label fails for non-existent labels).
 _REVIEW_LABEL_SPECS: dict[str, tuple[str, str]] = {
@@ -231,24 +302,40 @@ def _extract_analysis_text(comments: list[dict[str, str]]) -> str | None:
     return None
 
 
-def _executor_model_from_pr(pr_body: str) -> str | None:
-    """Parse '**Implemented by**: `opencode/glm-5.1`' → 'glm-5.1'."""
+def _implemented_by_from_pr(pr_body: str) -> tuple[str | None, str | None]:
+    """Parse '**Implemented by**: `opencode/glm-5.1`' → ('opencode', 'glm-5.1')."""
     m = re.search(r"\*\*Implemented by\*\*:\s*`([^`]+)`", pr_body or "")
     if not m:
-        return None
+        return None, None
     tag = m.group(1).strip()
-    return tag.split("/", 1)[1] if "/" in tag else tag
+    if "/" in tag:
+        exe, model = tag.split("/", 1)
+        return exe.strip().lower(), model.strip()
+    return None, tag.strip()
+
+
+def _executor_model_from_pr(pr_body: str) -> str | None:
+    """Parse PR body Implemented-by tag → executor model only."""
+    _, model = _implemented_by_from_pr(pr_body)
+    return model
+
+
+def pick_review_route(
+    executor_name: str | None,
+    executor_model: str | None,
+) -> ReviewRoute:
+    """Pick review agent route on a different *platform* than Pipeline D."""
+    exe = (executor_name or "").lower()
+    for route in _review_route_pool():
+        if exe and _same_agent_platform(route.executor.lower(), exe):
+            continue
+        return route
+    return _default_review_route()
 
 
 def pick_review_model(executor_model: str | None) -> str:
-    """Return a review model guaranteed to differ from the executor model."""
-    preferred = _DEFAULT_REVIEW_MODEL
-    if not executor_model or preferred != executor_model:
-        return preferred
-    for candidate in _REVIEW_MODEL_POOL:
-        if candidate != executor_model:
-            return candidate
-    return preferred
+    """Legacy helper — returns model leg of :func:`pick_review_route`."""
+    return pick_review_route(None, executor_model).model
 
 
 def _fetch_pr_diff(repo: str, pr_number: int, max_chars: int = 60000) -> str:
@@ -349,7 +436,7 @@ _REVIEW_PROMPT = """你是 ASP Pipeline E 的 **Gate Reviewer**。你只做 code
 - **Repo**: {repo}
 - **PR**: #{pr_number} {pr_url}
 - **分支**: {pr_branch} → {base_branch}
-- **执行模型（你必须使用不同模型审查）**: {executor_model}
+- **执行 Agent（你必须委托给不同 Agent 平台审查）**: {executor_agent}
 
 ### 关联 Issue #{number}: {title}
 
@@ -392,15 +479,22 @@ def build_review_prompt(
     pr: dict[str, Any],
     analysis_text: str,
     diff: str,
+    executor_name: str | None,
     executor_model: str | None,
 ) -> str:
+    if executor_name and executor_model:
+        executor_agent = f"{executor_name}/{executor_model}"
+    elif executor_model:
+        executor_agent = executor_model
+    else:
+        executor_agent = "unknown"
     return _REVIEW_PROMPT.format(
         repo=issue_repo(issue),
         pr_number=pr.get("number", "?"),
         pr_url=pr.get("url", ""),
         pr_branch=pr.get("headRefName", ""),
         base_branch=pr.get("baseRefName", ""),
-        executor_model=executor_model or "unknown",
+        executor_agent=executor_agent,
         number=issue.get("number"),
         title=issue.get("title", ""),
         body=(issue.get("body", "") or "")[:2500],
@@ -529,8 +623,27 @@ def review_issue(
     print(f"  PR #{pr.get('number')} ({pr.get('headRefName')} → {pr.get('baseRefName')})")
 
     if dry_run:
-        print(f"  [DRY RUN] would gate-review PR {pr.get('url')}")
-        return {"status": "dry_run", "pr": pr.get("number")}
+        pr_body = pr.get("body", "")
+        if not pr_body:
+            try:
+                raw = run_gh("pr", "view", str(pr["number"]), "-R", repo, "--json", "body")
+                pr_body = json.loads(raw).get("body", "")
+            except (RuntimeError, json.JSONDecodeError, KeyError):
+                pr_body = ""
+        exe_name, exe_model = _implemented_by_from_pr(pr_body)
+        route = pick_review_route(exe_name, exe_model)
+        client_ok = _load_gate_review_client() is not None
+        print(
+            f"  [DRY RUN] would gate-review PR {pr.get('url')}\n"
+            f"  [DRY RUN] Pipeline D: {exe_name or '?'}/{exe_model or '?'} "
+            f"→ delegate: {route.executor}/{route.model} "
+            f"(AgentClient={'ok' if client_ok else 'MISSING'})"
+        )
+        return {
+            "status": "dry_run",
+            "pr": pr.get("number"),
+            "review_route": {"executor": route.executor, "model": route.model},
+        }
 
     if not _acquire_lock(number, repo, dry_run=False):
         print(f"  {repo}#{number}: locked (review-in-progress), skipping")
@@ -547,30 +660,44 @@ def review_issue(
                 pr_body = json.loads(raw).get("body", "")
             except (RuntimeError, json.JSONDecodeError, KeyError):
                 pr_body = ""
-        executor_model = _executor_model_from_pr(pr_body)
-        review_model = pick_review_model(executor_model)
-        if review_model == executor_model:
-            print(f"  WARNING: review model == executor model ({review_model}); proceeding")
-        print(f"  Executor model: {executor_model or 'unknown'} → review model: {review_model}")
+        executor_name, executor_model = _implemented_by_from_pr(pr_body)
+        review_route = pick_review_route(executor_name, executor_model)
+        if executor_name and _same_agent_platform(
+            review_route.executor.lower(), executor_name.lower()
+        ):
+            print(
+                f"  WARNING: review platform == Pipeline D platform ({review_route.executor}); proceeding"
+            )
+        print(
+            f"  Pipeline D: {executor_name or '?'}/{executor_model or '?'} "
+            f"→ gate review delegate: {review_route.executor}/{review_route.model}"
+        )
 
         diff = _fetch_pr_diff(repo, pr["number"])
         surface = _surface_for(repo, pr.get("headRefName", ""))
         workdir = _surface_worktree(surface)
         workdir_str = str(workdir) if workdir.exists() else str(_ASP_ROOT)
 
-        if AgentClient is None:
-            print("  Error: AgentClient not importable")
+        GateReviewClient = _load_gate_review_client()
+        if GateReviewClient is None:
+            print("  Error: rootgrove tools.agent_clients not importable (ASP_WORKTREE_ROOT?)")
             return None
 
-        prompt = build_review_prompt(issue, pr, analysis_text, diff, executor_model)
+        prompt = build_review_prompt(
+            issue, pr, analysis_text, diff, executor_name, executor_model,
+        )
         timeout = int(os.getenv("AGENT_CLIENT_TIMEOUT", "1800"))
-        print(f"  Running gate review (model={review_model}, workdir={workdir_str})...")
-        result = AgentClient().run(
+        print(
+            f"  Running gate review (delegate {review_route.executor}/{review_route.model}, "
+            f"workdir={workdir_str})..."
+        )
+        result = GateReviewClient().run(
             prompt,
             intent="review",
             workdir=workdir_str,
             timeout_sec=timeout,
-            model=review_model,
+            executor=review_route.executor,
+            model=review_route.model,
         )
 
         if result.status != "success" or not result.text:
@@ -581,7 +708,13 @@ def review_issue(
             review_text = result.text
             verdict = parse_verdict(review_text)
         summary = _summary_from_review(review_text)
-        print(f"  Verdict: {verdict} (model={result.model})")
+        review_agent = f"{result.executor}/{result.model or review_route.model}"
+        d_agent = (
+            f"{executor_name}/{executor_model}"
+            if executor_name and executor_model
+            else (executor_model or "unknown")
+        )
+        print(f"  Verdict: {verdict} (review_agent={review_agent})")
 
         if verdict == _VERDICT_PASS:
             _add_label(number, repo, _REVIEW_PASS_LABEL, dry_run=False)
@@ -589,7 +722,7 @@ def review_issue(
             _post_comment(
                 number, repo,
                 f"{_APPROVED_MARKER}\n\n"
-                f"_审查模型 `{review_model}` ≠ 执行模型 `{executor_model or 'unknown'}`。_\n\n"
+                f"_审查 Agent `{review_agent}` ≠ 执行 Agent `{d_agent}`。_\n\n"
                 f"{review_text}\n\n---\n_Pipeline E gate passed. 不自动合并；等待人工合入 dev。_",
                 dry_run=False,
             )
@@ -603,7 +736,7 @@ def review_issue(
             _post_comment(
                 number, repo,
                 f"{_GATE_REVIEW_MARKER}\n\n"
-                f"_审查模型 `{review_model}` ≠ 执行模型 `{executor_model or 'unknown'}`。_\n\n"
+                f"_审查 Agent `{review_agent}` ≠ 执行 Agent `{d_agent}`。_\n\n"
                 f"{review_text}\n\n---\n_Pipeline E 打回：已移除 `executed`，Pipeline D 下一轮将按上述反馈修订。_",
                 dry_run=False,
             )
@@ -612,7 +745,7 @@ def review_issue(
             _post_comment(
                 number, repo,
                 f"{_GATE_REVIEW_MARKER} — ⚠️ 审查未产出明确结论\n\n"
-                f"模型 `{review_model}` 输出无法解析为通过/打回，标签未变更，需人工查看。\n\n"
+                f"审查 Agent `{review_agent}` 输出无法解析为通过/打回，标签未变更，需人工查看。\n\n"
                 f"<details><summary>原始输出</summary>\n\n{review_text[:3000]}\n\n</details>",
                 dry_run=False,
             )
@@ -630,7 +763,9 @@ def review_issue(
             "pr": pr.get("number"),
             "pr_url": pr.get("url", ""),
             "verdict": verdict,
-            "review_model": review_model,
+            "review_executor": review_route.executor,
+            "review_model": review_route.model,
+            "executor_name": executor_name,
             "executor_model": executor_model,
             "central": central,
         }
@@ -739,8 +874,11 @@ def main() -> None:
         print("Nothing to review.")
         return
 
-    if not args.dry_run and AgentClient is None:
-        print("Error: AgentClient not importable (tools/agent_client.py)")
+    if not args.dry_run and _load_gate_review_client() is None:
+        print(
+            "Error: rootgrove tools.agent_clients not importable "
+            f"(ASP_WORKTREE_ROOT={_WORKTREE_ROOT})"
+        )
         sys.exit(1)
 
     # --- Parallel via subprocess (per repo#issue; lock is per-issue label) ---

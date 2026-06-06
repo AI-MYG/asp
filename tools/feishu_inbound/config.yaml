@@ -50,17 +50,22 @@ launchd_schedules:
     weekday_only: false
 
 # --- Pipeline E: gate review (review only, never edits code / merges) ---
-# review_model MUST differ from the executor model (recorded in PR body
-# "**Implemented by**: `opencode/<model>`"); env PIPELINE_E_REVIEW_MODEL overrides.
-# Feishu DM target: env PIPELINE_E_FEISHU_OPEN_ID (Keychain) > team_registry marvin;
-# falls back to FEISHU_WEBHOOK_URL group message when no open_id is configured.
+# Delegates to a *different agent platform* than Pipeline D (not another OpenCode model).
+# PR body records D via "**Implemented by**: `opencode/glm-5.1`" → E uses cursor_sdk/composer-2.5.
+# Overrides: PIPELINE_E_REVIEW_EXECUTOR, PIPELINE_E_REVIEW_MODEL (env) > fields below.
+# Feishu DM: PIPELINE_E_FEISHU_OPEN_ID (Keychain) > team_registry marvin > FEISHU_WEBHOOK_URL.
 pipeline_e:
-  review_model: claude-sonnet-4-20250514
-  # Fallback pool when the preferred review_model equals the executor model.
-  # Review model MUST differ from the executor model (mutual exclusion).
-  review_model_pool:
-    - claude-sonnet-4-20250514
-    - glm-5.1
+  review_executor: cursor_sdk
+  review_model: composer-2.5
+  review_route_pool:
+    - executor: cursor_sdk
+      model: composer-2.5
+    - executor: cursor_agent
+      model: composer-2.5
+    - executor: claude_code
+      model: claude-sonnet-4
+    - executor: opencode
+      model: glm-5.1
   max_parallel: 3
 
 central_triage:

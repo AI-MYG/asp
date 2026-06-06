@@ -1,7 +1,7 @@
 """Regression tests for Pipeline E gate reviewer — pure decision logic.
 
 These tests avoid any network / gh / agent calls: they exercise the verdict
-parser, the gate state machine, and the review-model mutual-exclusion rule.
+parser, the gate state machine, and the review-route mutual-exclusion rule.
 """
 
 from __future__ import annotations
@@ -54,38 +54,43 @@ class TestParseVerdict:
 
 
 # ---------------------------------------------------------------------------
-# Review model mutual exclusion (review model != executor model)
+# Review route mutual exclusion (different agent platform than Pipeline D)
 # ---------------------------------------------------------------------------
-class TestReviewModelSelection:
-    def test_default_differs_from_glm_executor(self):
+class TestReviewRouteSelection:
+    def test_opencode_executor_gets_cursor_delegate(self):
+        route = e.pick_review_route("opencode", "glm-5.1")
+        assert route.executor in ("cursor_sdk", "cursor_agent")
+        assert route.model == "composer-2.5"
+
+    def test_cursor_executor_gets_non_cursor_platform(self):
+        route = e.pick_review_route("cursor_sdk", "composer-2.5")
+        assert route.executor not in ("cursor_sdk", "cursor_agent")
+
+    def test_unknown_executor_uses_default_cursor(self):
+        route = e.pick_review_route(None, None)
+        assert route.executor == "cursor_sdk"
+        assert route.model == "composer-2.5"
+
+    def test_legacy_pick_review_model_differs_from_glm(self):
         m = e.pick_review_model("glm-5.1")
         assert m != "glm-5.1"
 
-    def test_falls_back_when_executor_is_default(self):
-        # When executor used the default review model, pick a different one.
-        m = e.pick_review_model(e._DEFAULT_REVIEW_MODEL)
-        assert m != e._DEFAULT_REVIEW_MODEL
 
-    def test_unknown_executor_uses_default(self):
-        assert e.pick_review_model(None) == e._DEFAULT_REVIEW_MODEL
-
-    def test_result_in_pool_or_default(self):
-        for exe in ("glm-5.1", "claude-sonnet-4-20250514", None, "other"):
-            m = e.pick_review_model(exe)
-            assert m and m != exe or exe is None
-
-
-class TestExecutorModelParse:
-    def test_parse_from_pr_body(self):
+class TestImplementedByParse:
+    def test_parse_executor_and_model(self):
         body = "Closes AI-MYG/asp#41\n\n**Implemented by**: `opencode/glm-5.1`\n\n🤖"
-        assert e._executor_model_from_pr(body) == "glm-5.1"
+        assert e._implemented_by_from_pr(body) == ("opencode", "glm-5.1")
 
-    def test_parse_without_executor_prefix(self):
+    def test_parse_model_only_tag(self):
         body = "**Implemented by**: `glm-5.1`"
+        assert e._implemented_by_from_pr(body) == (None, "glm-5.1")
+
+    def test_executor_model_helper(self):
+        body = "**Implemented by**: `opencode/glm-5.1`"
         assert e._executor_model_from_pr(body) == "glm-5.1"
 
     def test_none_when_missing(self):
-        assert e._executor_model_from_pr("no model line here") is None
+        assert e._implemented_by_from_pr("no model line here") == (None, None)
 
 
 # ---------------------------------------------------------------------------

@@ -77,7 +77,7 @@ A 入站、B 分诊、C 分析、D 执行、E gate review。A 在云端，B–E 
 ### Pipeline E: PR Gate Review (dev 门)
 
 - **触发**: surface execution issue 带 `executed` + open linked PR + 无 `review-dev-pass`（launchd `:15/:45`，在 D 之后）
-- **执行**: 用 **不同于 executor 的模型** 读 PR diff + analysis 做 gate review；**只 review，不改代码/不 merge**
+- **执行**: 经 rootgrove AgentClient **委托到与 Pipeline D 不同的 Agent 平台**（如 D=OpenCode、E=Cursor Composer 2.5）读 PR diff + analysis 做 gate review；**只 review，不改代码/不 merge**
 - **状态机**:
   - 通过 → 打 `review-dev-pass`（保留 `executed`，不 merge）+ 业务语言飞书私信 → 人工合入 dev
   - 打回 → 去 `executed` + 打 `review-changes-requested` + `## Pipeline E Gate Review` comment + 飞书私信 → 回 Pipeline D 修订
