@@ -79,7 +79,7 @@ _EXECUTED_LABEL = "executed"
 _REVIEW_PASS_LABEL = "review-dev-pass"
 _REVIEW_CHANGES_LABEL = "review-changes-requested"
 _REVIEW_LOCK_LABEL = "review-in-progress"
-_LOCK_STALE_SECONDS = int(os.getenv("PIPELINE_E_LOCK_STALE_SECONDS", "3600"))
+_LOCK_STALE_SECONDS = int(os.getenv("PIPELINE_E_LOCK_STALE_SECONDS", "9000"))
 _GATE_REVIEW_MARKER = "## Pipeline E Gate Review"
 _APPROVED_MARKER = "## Pipeline E Review — Approved (dev gate)"
 _ANALYSIS_MARKER = "## Feishu Inbound Analysis"
@@ -868,6 +868,9 @@ def _collect_candidates(
             if not _auto_release_stale_lock(number, repo):
                 print(f"  {repo}#{number}: locked (review-in-progress)")
                 continue
+            # Refresh cached labels after stale lock release so needs_review()
+            # does not skip this issue due to stale review-in-progress label.
+            labels = [lb for lb in labels if lb != _REVIEW_LOCK_LABEL]
         central = _extract_central_number(issue)
         pr = _find_linked_pr(repo, number, central)
         action = needs_review(issue, pr, force)
