@@ -79,6 +79,7 @@ _EXECUTED_LABEL = "executed"
 _REVIEW_PASS_LABEL = "review-dev-pass"
 _REVIEW_CHANGES_LABEL = "review-changes-requested"
 _REVIEW_LOCK_LABEL = "review-in-progress"
+_LOCK_STALE_SECONDS = int(os.getenv("PIPELINE_E_LOCK_STALE_SECONDS", "9000"))
 _GATE_REVIEW_MARKER = "## Pipeline E Gate Review"
 _APPROVED_MARKER = "## Pipeline E Review — Approved (dev gate)"
 _ANALYSIS_MARKER = "## Feishu Inbound Analysis"
@@ -232,6 +233,39 @@ def _remove_label(number: int, repo: str, label: str, dry_run: bool = False) -> 
         pass
 
 
+def _lock_age_seconds(number: int, repo: str) -> float | None:
+    """Seconds since ``review-in-progress`` was last added, via GitHub timeline API."""
+    try:
+        raw = run_gh(
+            "api", f"repos/{repo}/issues/{number}/timeline",
+            "--paginate", "--jq",
+            '[.[] | select(.event=="labeled" and .label.name=="review-in-progress")] | last | .created_at',
+        )
+        ts = raw.strip().strip('"')
+        if not ts or ts == "null":
+            return None
+        t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - t).total_seconds()
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _auto_release_stale_lock(number: int, repo: str) -> bool:
+    """If the lock label has been held longer than the threshold, force-release it.
+
+    Returns True if the lock was stale and released (caller may proceed).
+    """
+    age = _lock_age_seconds(number, repo)
+    if age is not None and age > _LOCK_STALE_SECONDS:
+        print(
+            f"  {repo}#{number}: stale lock detected ({age / 60:.0f}min > "
+            f"{_LOCK_STALE_SECONDS // 60}min threshold), auto-releasing"
+        )
+        _release_lock(number, repo)
+        return True
+    return False
+
+
 def _acquire_lock(number: int, repo: str, dry_run: bool) -> bool:
     if dry_run:
         return True
@@ -239,7 +273,8 @@ def _acquire_lock(number: int, repo: str, dry_run: bool) -> bool:
         raw = run_gh("issue", "view", str(number), "-R", repo, "--json", "labels")
         labels = [lb["name"] for lb in json.loads(raw).get("labels", [])]
         if _REVIEW_LOCK_LABEL in labels:
-            return False
+            if not _auto_release_stale_lock(number, repo):
+                return False
         _ensure_label(repo, _REVIEW_LOCK_LABEL)
         run_gh("issue", "edit", str(number), "-R", repo, "--add-label", _REVIEW_LOCK_LABEL)
         return True
@@ -325,12 +360,21 @@ def pick_review_route(
     executor_model: str | None,
 ) -> ReviewRoute:
     """Pick review agent route on a different *platform* than Pipeline D."""
+    routes = pick_review_routes(executor_name, executor_model)
+    return routes[0] if routes else _default_review_route()
+
+
+def pick_review_routes(
+    executor_name: str | None,
+    executor_model: str | None,
+) -> list[ReviewRoute]:
+    """Return ranked list of candidate review routes excluding Pipeline D's platform."""
     exe = (executor_name or "").lower()
-    for route in _review_route_pool():
-        if exe and _same_agent_platform(route.executor.lower(), exe):
-            continue
-        return route
-    return _default_review_route()
+    candidates = [
+        route for route in _review_route_pool()
+        if not (exe and _same_agent_platform(route.executor.lower(), exe))
+    ]
+    return candidates if candidates else [_default_review_route()]
 
 
 def pick_review_model(executor_model: str | None) -> str:
@@ -542,8 +586,8 @@ def notify_feishu(text: str, *, dry_run: bool) -> str:
         return "skipped_no_module"
 
     open_id = _feishu_open_id()
-    app_id = os.getenv("FEISHU_APP_ID", "")
-    app_secret = os.getenv("FEISHU_APP_SECRET", "")
+    app_id = os.getenv("FEISHU_APP_ID") or os.getenv("IC_FEISHU_APP_ID", "")
+    app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv("IC_FEISHU_APP_SECRET", "")
     try:
         if open_id and app_id and app_secret:
             _notify.send_feishu_dm(app_id, app_secret, open_id, text, dry_run=False)
@@ -661,7 +705,8 @@ def review_issue(
             except (RuntimeError, json.JSONDecodeError, KeyError):
                 pr_body = ""
         executor_name, executor_model = _implemented_by_from_pr(pr_body)
-        review_route = pick_review_route(executor_name, executor_model)
+        review_routes = pick_review_routes(executor_name, executor_model)
+        review_route = review_routes[0]
         if executor_name and _same_agent_platform(
             review_route.executor.lower(), executor_name.lower()
         ):
@@ -671,6 +716,7 @@ def review_issue(
         print(
             f"  Pipeline D: {executor_name or '?'}/{executor_model or '?'} "
             f"→ gate review delegate: {review_route.executor}/{review_route.model}"
+            f" ({len(review_routes)} route(s) in pool)"
         )
 
         diff = _fetch_pr_diff(repo, pr["number"])
@@ -687,23 +733,34 @@ def review_issue(
             issue, pr, analysis_text, diff, executor_name, executor_model,
         )
         timeout = int(os.getenv("AGENT_CLIENT_TIMEOUT", "1800"))
-        print(
-            f"  Running gate review (delegate {review_route.executor}/{review_route.model}, "
-            f"workdir={workdir_str})..."
-        )
-        result = GateReviewClient().run(
-            prompt,
-            intent="review",
-            workdir=workdir_str,
-            timeout_sec=timeout,
-            executor=review_route.executor,
-            model=review_route.model,
-        )
 
-        if result.status != "success" or not result.text:
+        # Try each route in the pool until one succeeds
+        result = None
+        for i, route in enumerate(review_routes):
+            review_route = route
+            print(
+                f"  Running gate review (delegate {route.executor}/{route.model}, "
+                f"workdir={workdir_str})..."
+            )
+            result = GateReviewClient().run(
+                prompt,
+                intent="review",
+                workdir=workdir_str,
+                timeout_sec=timeout,
+                executor=route.executor,
+                model=route.model,
+            )
+            if result.status == "success" and result.text:
+                break
+            print(f"  Route failed: {result.error}")
+            if i < len(review_routes) - 1:
+                print(f"  Falling back to next route: {review_routes[i + 1].executor}/{review_routes[i + 1].model}")
+
+        if result is None or (result.status != "success" or not result.text):
             verdict = _VERDICT_UNKNOWN
-            review_text = result.text or ""
-            print(f"  Review agent failed: {result.error}")
+            review_text = (result.text or "") if result else ""
+            if result:
+                print(f"  All review routes exhausted. Last error: {result.error}")
         else:
             review_text = result.text
             verdict = parse_verdict(review_text)
@@ -808,8 +865,16 @@ def _collect_candidates(
         if not force and (_EXECUTED_LABEL not in labels or _REVIEW_PASS_LABEL in labels):
             continue
         if _REVIEW_LOCK_LABEL in labels:
-            print(f"  {repo}#{number}: locked (review-in-progress)")
-            continue
+            if not _auto_release_stale_lock(number, repo):
+                print(f"  {repo}#{number}: locked (review-in-progress)")
+                continue
+            # Refresh issue's label list after stale lock release so
+            # needs_review() → _issue_labels(issue) sees the updated state.
+            issue["labels"] = [
+                lb for lb in issue.get("labels", [])
+                if lb.get("name") != _REVIEW_LOCK_LABEL
+            ]
+            labels = _issue_labels(issue)
         central = _extract_central_number(issue)
         pr = _find_linked_pr(repo, number, central)
         action = needs_review(issue, pr, force)

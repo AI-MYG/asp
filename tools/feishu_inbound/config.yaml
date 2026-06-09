@@ -55,12 +55,12 @@ launchd_schedules:
 # Overrides: PIPELINE_E_REVIEW_EXECUTOR, PIPELINE_E_REVIEW_MODEL (env) > fields below.
 # Feishu DM: PIPELINE_E_FEISHU_OPEN_ID (Keychain) > team_registry marvin > FEISHU_WEBHOOK_URL.
 pipeline_e:
-  review_executor: cursor_sdk
+  review_executor: cursor_agent
   review_model: composer-2.5
   review_route_pool:
-    - executor: cursor_sdk
-      model: composer-2.5
     - executor: cursor_agent
+      model: composer-2.5
+    - executor: cursor_sdk
       model: composer-2.5
     - executor: claude_code
       model: claude-sonnet-4

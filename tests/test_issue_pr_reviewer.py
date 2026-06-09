@@ -68,7 +68,7 @@ class TestReviewRouteSelection:
 
     def test_unknown_executor_uses_default_cursor(self):
         route = e.pick_review_route(None, None)
-        assert route.executor == "cursor_sdk"
+        assert route.executor == "cursor_agent"
         assert route.model == "composer-2.5"
 
     def test_legacy_pick_review_model_differs_from_glm(self):

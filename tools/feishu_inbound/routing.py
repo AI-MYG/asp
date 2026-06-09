@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,16 +36,29 @@ def _extract_executor_from_body(body: str) -> str | None:
     return _NAME_TO_ID.get(name)
 
 
-def run_gh(*args: str, check: bool = True) -> str:
-    result = subprocess.run(
-        [_GH_BIN, *args],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if check and result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"gh failed: {' '.join(args)}")
-    return result.stdout.strip()
+_TRANSIENT_PATTERNS = ("EOF", "connection reset", "TLS handshake timeout", "broken pipe")
+
+
+def run_gh(*args: str, check: bool = True, retries: int = 3) -> str:
+    for attempt in range(retries + 1):
+        result = subprocess.run(
+            [_GH_BIN, *args],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        err = result.stderr.strip() or f"gh failed: {' '.join(args)}"
+        if attempt < retries and any(p in err for p in _TRANSIENT_PATTERNS):
+            wait = 2 ** (attempt + 1)
+            print(f"  gh transient error (attempt {attempt + 1}/{retries}), retry in {wait}s: {err}")
+            time.sleep(wait)
+            continue
+        if check:
+            raise RuntimeError(err)
+        return result.stdout.strip()
+    return ""
 
 
 def load_config() -> dict[str, Any]:
