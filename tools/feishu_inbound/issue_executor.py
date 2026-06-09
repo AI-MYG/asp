@@ -450,15 +450,21 @@ def _remove_label(number: int, repo: str, label: str) -> None:
 def _acquire_lock(number: int, repo: str, dry_run: bool) -> bool:
     if dry_run:
         return True
-    try:
-        raw = run_gh("issue", "view", str(number), "-R", repo, "--json", "labels")
-        labels = [lb["name"] for lb in json.loads(raw).get("labels", [])]
-        if _LOCK_LABEL in labels:
-            return False
-        run_gh("issue", "edit", str(number), "-R", repo, "--add-label", _LOCK_LABEL)
-        return True
-    except RuntimeError:
-        return False
+    for attempt in range(3):
+        try:
+            raw = run_gh("issue", "view", str(number), "-R", repo, "--json", "labels")
+            labels = [lb["name"] for lb in json.loads(raw).get("labels", [])]
+            if _LOCK_LABEL in labels:
+                return False
+            run_gh("issue", "edit", str(number), "-R", repo, "--add-label", _LOCK_LABEL)
+            return True
+        except RuntimeError as e:
+            if attempt < 2:
+                print(f"  Lock attempt {attempt + 1} failed ({e}), retrying...")
+                time.sleep(2 * (attempt + 1))
+            else:
+                print(f"  Failed to acquire lock after 3 attempts: {e}")
+                return False
 
 
 def _release_lock(number: int, repo: str) -> None:
@@ -545,6 +551,16 @@ def _create_issue_worktree(
             sp.run(["git", "worktree", "remove", "--force", str(worktree_path)],
                    cwd=surface_repo, capture_output=True)
 
+        # If the surface repo's own HEAD is on the target branch, switch it back
+        # to base_branch first — git disallows two worktrees on the same branch.
+        head_ref = sp.run(
+            ["git", "symbolic-ref", "--short", "HEAD"],
+            cwd=surface_repo, capture_output=True, text=True,
+        )
+        if head_ref.returncode == 0 and head_ref.stdout.strip() == branch:
+            sp.run(["git", "checkout", base_branch],
+                   cwd=surface_repo, capture_output=True, text=True)
+
         result = sp.run(
             ["git", "branch", "-r", "--list", f"origin/{branch}"],
             cwd=surface_repo, capture_output=True, text=True,
@@ -552,13 +568,15 @@ def _create_issue_worktree(
 
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
         if result.stdout.strip():
+            # Remote branch exists: reset local branch to remote state
             sp.run(
                 ["git", "worktree", "add", "-B", branch, str(worktree_path), f"origin/{branch}"],
                 cwd=surface_repo, check=True, capture_output=True, text=True,
             )
         else:
+            # No remote branch: create (or force-reset) local branch from base
             sp.run(
-                ["git", "worktree", "add", "-b", branch, str(worktree_path), f"origin/{base_branch}"],
+                ["git", "worktree", "add", "-B", branch, str(worktree_path), f"origin/{base_branch}"],
                 cwd=surface_repo, check=True, capture_output=True, text=True,
             )
         return worktree_path
