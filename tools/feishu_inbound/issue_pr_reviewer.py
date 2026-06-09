@@ -868,9 +868,13 @@ def _collect_candidates(
             if not _auto_release_stale_lock(number, repo):
                 print(f"  {repo}#{number}: locked (review-in-progress)")
                 continue
-            # Refresh cached labels after stale lock release so needs_review()
-            # does not skip this issue due to stale review-in-progress label.
-            labels = [lb for lb in labels if lb != _REVIEW_LOCK_LABEL]
+            # Refresh issue's label list after stale lock release so
+            # needs_review() → _issue_labels(issue) sees the updated state.
+            issue["labels"] = [
+                lb for lb in issue.get("labels", [])
+                if lb.get("name") != _REVIEW_LOCK_LABEL
+            ]
+            labels = _issue_labels(issue)
         central = _extract_central_number(issue)
         pr = _find_linked_pr(repo, number, central)
         action = needs_review(issue, pr, force)
