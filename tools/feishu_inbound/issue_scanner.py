@@ -42,6 +42,35 @@ _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
 ).resolve()
 
+
+def _surface_workdir(surface: str) -> Path:
+    """Resolve the local code dir for a surface from surfaces.yaml.
+
+    Lets the analysis agent read that surface's real code. Honors absolute
+    local_path values; relative ones join under ASP_WORKTREE_ROOT. Falls back
+    to a guaranteed-existing dir (the ASP repo root) when surfaces.yaml or the
+    surface's local code dir is unavailable — the analysis agent only needs a
+    valid cwd to start in, and an invalid cwd makes claude crash on Windows with
+    WinError 267 (目录名称无效).
+    """
+    try:
+        import yaml
+
+        with open(_ASP_ROOT / "config" / "surfaces.yaml", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        lp = ((data.get("surfaces") or {}).get(surface) or {}).get("local_path")
+        if lp:
+            # expanduser so "~/..." in ASP_WORKTREE_ROOT / local_path resolves to
+            # a real home path instead of a literal "~" dir that doesn't exist.
+            p = Path(str(lp)).expanduser()
+            resolved = p if p.is_absolute() else (_WORKTREE_ROOT.expanduser() / p)
+            if resolved.exists():
+                return resolved.resolve()
+    except (ImportError, OSError):
+        pass
+    # 兜底：ASP 仓库根一定存在，保证 claude 有个有效的 cwd（避免 WinError 267）。
+    return _ASP_ROOT
+
 sys.path.insert(0, str(_ASP_ROOT))
 sys.path.insert(0, str(_SCRIPT_DIR))
 
@@ -52,10 +81,15 @@ from routing import (  # noqa: E402
     load_config,
     preflight_routing,
     run_gh,
+    surface_repos_for_operator,
 )
 
 # issue_scanner operates on surface repos (execution issues), not the central repo.
-REPO = "AI-MYG/asp-backend"
+# Repo is selected via ASP_SURFACE_REPO so a developer can scan all the surfaces
+# they own (app/admin/...) instead of a hardcoded backend. The top-level run
+# resolves the operator's repos from config/surfaces.yaml and dispatches one
+# child process per repo (each child sees ASP_SURFACE_REPO in its env).
+REPO = os.getenv("ASP_SURFACE_REPO", "AI-MYG/asp-backend")
 from sync_worktrees import sync_asp_worktrees, surfaces_to_sync  # noqa: E402
 
 try:
@@ -79,6 +113,42 @@ from inbound_agent import (  # noqa: E402
 
 def _operator() -> str:
     return (os.getenv("GITHUB_ASSIGNEE") or "369795172").strip()
+
+
+def _dispatch_per_repo(repos: list[str], operator: str) -> bool:
+    """Re-exec this script once per surface repo, with ASP_SURFACE_REPO pinned.
+
+    The top-level invocation has no repo pinned (module ``REPO`` defaulted at
+    import), so we re-exec one child per resolved repo with the repo in env.
+    Children see ASP_SURFACE_REPO and run the real work. Returns True so the
+    caller returns immediately.
+    """
+    # Pass through original CLI args, dropping --repo / --repo=... (now pinned via env)
+    passthrough: list[str] = []
+    skip_next = False
+    for a in sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--repo":
+            skip_next = True
+            continue
+        if a.startswith("--repo="):
+            continue
+        passthrough.append(a)
+
+    rc = 0
+    for repo in repos:
+        print(f"\n{'#'*60}\n# Repo: {repo}  (operator={operator})\n{'#'*60}")
+        env = {**os.environ, "ASP_SURFACE_REPO": repo, "GITHUB_ASSIGNEE": operator}
+        proc = sp.run(
+            [sys.executable, str(Path(__file__).resolve()), *passthrough],
+            env=env,
+        )
+        rc = rc or proc.returncode
+    if rc:
+        sys.exit(rc)
+    return True
 
 
 def _issue_labels(issue: dict[str, Any]) -> list[str]:
@@ -179,6 +249,20 @@ def analyze_issue(
     routing = preflight_routing(issue, config)
     routing_md = format_routing_section(routing)
     surfaces = routing["surfaces"]
+    # Allow forcing the primary surface (keyword routing can mis-detect a pure
+    # admin/app issue as cross-surface). ASP_FORCE_SURFACE pins which surface's
+    # code the analysis agent reads and which worktree Pipeline D will target.
+    forced = os.getenv("ASP_FORCE_SURFACE", "").strip()
+    if forced:
+        surfaces = [forced] + [s for s in surfaces if s != forced]
+    # primary_surface 决定 analysis agent 在哪个 surface 的代码目录里启动。
+    # 跨 surface issue（如 #16=[backend,admin,app]）若把 primary 选成本地不存在的
+    # surface（你只有 app/admin，没有 backend），agent 的 cwd 会落到无效目录 →
+    # claude 在 Windows 报 WinError 267。所以优先选 local_path 真实存在的 surface。
+    if not forced and surfaces:
+        present = [s for s in surfaces if _surface_workdir(s) != _ASP_ROOT]
+        if present:
+            surfaces = present + [s for s in surfaces if s not in present]
     primary_surface = surfaces[0] if surfaces else "backend"
     print(f"  Surfaces: {surfaces or 'NONE'}")
     print(f"  Scope: {routing['scope']}")
@@ -206,7 +290,7 @@ def analyze_issue(
         result = AgentClient().run(
             prompt,
             intent=intent,
-            workdir=_WORKTREE_ROOT,
+            workdir=_surface_workdir(primary_surface),
             timeout_sec=timeout,
             validate=_validate,
             finalize_prompt=_FINALIZE_PROMPT,
@@ -332,6 +416,8 @@ def main() -> None:
     parser.add_argument("--skip-sync", action="store_true")
     parser.add_argument("--batch", type=int, default=1, help="Max issues per run (default: 1)")
     parser.add_argument("--parallel", action="store_true", help="Process multiple issues in parallel")
+    parser.add_argument("--repo", help="Target a single surface repo (e.g. AI-MYG/asp-app); "
+                                       "default: auto-resolve all repos you own from surfaces.yaml")
     args = parser.parse_args()
 
     _load_env()
@@ -341,6 +427,16 @@ def main() -> None:
         sys.exit(1)
 
     operator = _operator()
+
+    # --- Multi-repo dispatch ---------------------------------------------
+    # Top-level invocation (no ASP_SURFACE_REPO in env yet) resolves the repos
+    # this operator owns and re-execs one child per repo with the repo pinned in
+    # the environment. Children (env already set) fall through and do real work.
+    if not os.getenv("ASP_SURFACE_REPO"):
+        repos = [args.repo] if args.repo else surface_repos_for_operator(operator)
+        if _dispatch_per_repo(repos, operator):
+            return
+
     config = load_config()
 
     try:

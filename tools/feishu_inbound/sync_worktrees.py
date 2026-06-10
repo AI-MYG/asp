@@ -60,7 +60,10 @@ class SyncReport:
 
 
 def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=180)
+    return subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True, timeout=180,
+        encoding="utf-8", errors="replace",
+    )
 
 
 def _load_surfaces() -> dict[str, Any]:

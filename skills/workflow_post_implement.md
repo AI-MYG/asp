@@ -10,6 +10,20 @@
 
 当某个 surface repo 的执行 issue 对应的 PR 已合并并部署后。
 
+## 前置：双闸门流程（Pipeline C/D）
+
+PR 产生之前，issue 会经过两道闸门（见 `tools/feishu_inbound/issue_executor.py`）：
+
+1. **人类需求确认闸门**：Pipeline C 分析后，报告含「第 0 章 给需求方的话」通俗总结。人类读懂后给 issue 打 `approved-to-execute` 标签，Pipeline D 才会改代码（difficulty-trivial 自动豁免）。一行确认命令：
+   ```bash
+   python tools/feishu_inbound/issue_executor.py --approve <issue> --repo <surface_repo>
+   ```
+2. **AI 代码互审闸门**：代码改完后，第二个 agent（`ASP_REVIEW_MODEL`，默认 sonnet）对照「需求分析 vs git diff」审查（只读、中性目录、UTF-8 stdin 传参）。
+   - 符合 → push + Smart PR，交人类做最终 review/merge（本 workflow）
+   - 不符合 → 打回重改，最多 `ASP_REVIEW_MAX_ROUNDS`（默认 2）轮；超限打 `review-failed` 标签、停下交人类
+   - 每轮审查结论以评论形式留痕在 issue 上
+   - 总开关 `ASP_REVIEW_ENABLED=false` 可整体关闭，回到「改完直接 push/PR」。
+
 ## Fixed Sequence
 
 ### 1. PR 合入确认

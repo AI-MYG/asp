@@ -81,3 +81,7 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
    ```bash
    python tools/smart_pr.py --issue 42 --surface backend
    ```
+
+## 自动化运行流程（Pipeline C/D）
+
+issue → AI 分析 → 审批 → AI 改代码 → PR → 合并的完整日常使用与运维说明（含定时任务、换 AI 后端、Windows/macOS 切换、故障排查），见 **[docs/pipeline_cd_workflow.md](docs/pipeline_cd_workflow.md)**。

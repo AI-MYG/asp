@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -41,7 +42,9 @@ from routing import (  # noqa: E402
 )
 
 # inbound_agent operates on surface repos (execution issues), not the central repo.
-REPO = "AI-MYG/asp-backend"
+# Repo is selected via ASP_SURFACE_REPO so Pipeline C/D can target any surface
+# (app/admin/...) instead of a hardcoded backend. Defaults preserve legacy behavior.
+REPO = os.getenv("ASP_SURFACE_REPO", "AI-MYG/asp-backend")
 from sync_worktrees import SyncReport, sync_asp_worktrees, surfaces_to_sync  # noqa: E402
 
 try:
@@ -53,6 +56,213 @@ except ImportError:
 _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
 ).resolve()
+
+
+def _surface_code_dir(surface: str) -> Path:
+    """Resolve a surface's local code dir from surfaces.yaml (abs path aware)."""
+    try:
+        import yaml
+
+        with open(_ASP_ROOT / "config" / "surfaces.yaml", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        lp = ((data.get("surfaces") or {}).get(surface) or {}).get("local_path")
+        if lp:
+            p = Path(str(lp))
+            resolved = p if p.is_absolute() else (_WORKTREE_ROOT / p)
+            if resolved.exists():
+                return resolved.resolve()
+    except (ImportError, OSError):
+        pass
+    return _WORKTREE_ROOT
+
+
+# UI / generic words that show up everywhere — never useful as grep seeds.
+# These are exactly the words a non-technical requester uses ("加一列"/"表格"/
+# "弹窗"/"宽度"), so they must be filtered out, NOT searched.
+_GREP_STOPWORDS = {
+    # generic verbs / nouns
+    "issue", "feature", "bug", "fix", "add", "新增", "增加", "修改", "优化", "问题",
+    "功能", "需求", "一个", "一列", "the", "and", "for", "with",
+    # UI layout vocabulary the user naturally speaks — pure noise in code search
+    "页面", "列表", "表格", "列", "项", "行", "宽度", "高度", "弹窗", "弹框", "对话框",
+    "按钮", "输入框", "下拉", "选项", "标题", "内容", "显示", "展示", "预览", "页",
+    "样式", "颜色", "布局", "组件", "字段", "数据", "接口", "状态", "时间", "操作",
+    # framework / tag noise — present in almost every Vue/TS file
+    "element", "plus", "vue", "el-table", "el-table-column", "el-form", "el-button",
+    "el-input", "el-select", "el-dialog", "component", "components", "import",
+    "export", "const", "function", "props", "src", "views", "api",
+}
+
+
+def _is_path_like(term: str) -> bool:
+    """A term that points at a concrete file/dir (high-signal, search by name)."""
+    return ("/" in term) or term.endswith((".vue", ".ts", ".js", ".tsx", ".py"))
+
+# Chinese business-domain term → English code tokens. The user describes needs in
+# domain language ("反馈问卷"); code is named in English ("feedback"/"form"). We
+# translate domain nouns to their likely code names and search THOSE — that's
+# what actually pinpoints the right module/dir/file.
+_DOMAIN_TERMS: dict[str, list[str]] = {
+    "反馈": ["feedback"],
+    "问卷": ["form", "survey", "questionnaire", "feedback"],
+    "课程": ["course", "lesson"],
+    "班级": ["class", "clazz"],
+    "用户": ["user", "account"],
+    "学生": ["student"],
+    "老师": ["teacher"],
+    "设备": ["device"],
+    "音频": ["audio"],
+    "视频": ["video"],
+    "图片": ["image", "media"],
+    "通知": ["notification", "message"],
+    "消息": ["message", "notification"],
+    "游戏": ["game", "gamification"],
+    "奖励": ["reward"],
+    "挑战": ["challenge"],
+    "关卡": ["level", "stage"],
+    "登录": ["login", "auth"],
+    "权限": ["permission", "role", "auth"],
+    "订单": ["order"],
+    "支付": ["pay", "payment"],
+    "投屏": ["cast", "screen"],
+    "评测": ["assessment", "evaluation", "speaking"],
+    "问题": ["question"],  # only as a domain noun, see note below
+}
+
+
+def _extract_keywords(title: str, body: str) -> list[str]:
+    """Pull HIGH-SIGNAL search seeds from an issue.
+
+    Priority order (most precise first):
+      1. explicit file/path hints (`code spans`, foo.vue, src/.../X.ts) — the
+         user or analyst named a file; search by that name.
+      2. domain nouns mapped to English code tokens via _DOMAIN_TERMS — the user
+         speaks business language ("反馈问卷"), code is English ("feedback").
+      3. CamelCase / dotted identifiers that look like real symbols.
+    Generic UI words (表格/列/弹窗/宽度...) are deliberately dropped — searching
+    them matches everything. Ordered, deduped, capped.
+    """
+    text = f"{title}\n{body}"
+    path_terms: list[str] = []
+    domain_terms: list[str] = []
+    ident_terms: list[str] = []
+
+    # 1. explicit file/path hints — highest signal
+    for m in re.findall(r"`([^`]+)`", text):
+        t = m.strip().split(":")[0]
+        if t and _is_path_like(t):
+            path_terms.append(t)
+    for m in re.findall(r"[A-Za-z][A-Za-z0-9_./-]*\.(?:vue|ts|js|tsx|py)", text):
+        path_terms.append(m)
+    for m in re.findall(r"[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z0-9_.-]+)+", text):
+        path_terms.append(m)
+
+    # 2. domain nouns → English code tokens
+    for zh, en_list in _DOMAIN_TERMS.items():
+        if zh in text:
+            domain_terms.extend(en_list)
+
+    # 3. CamelCase / multi-word identifiers (e.g. FormList) — likely symbols
+    for m in re.findall(r"[A-Z][a-z]+[A-Z][A-Za-z0-9]+", text):
+        ident_terms.append(m)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in path_terms + domain_terms + ident_terms:
+        tl = t.lower()
+        if tl in _GREP_STOPWORDS or tl in seen or len(t) < 2:
+            continue
+        seen.add(tl)
+        out.append(t)
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _grep_hint_section(issue: dict[str, Any], surface: str) -> str:
+    """Pre-search the surface code dir for issue keywords and return a Markdown
+    list of likely-relevant files, so the analysis agent can start reading there
+    instead of exploring the whole repo (big speedup). Best-effort; returns ""
+    on any failure so analysis still works without it.
+
+    Disable with ASP_GREP_HINTS=0.
+    """
+    if os.getenv("ASP_GREP_HINTS", "1").strip().lower() in ("0", "false", "no"):
+        return ""
+
+    code_dir = _surface_code_dir(surface)
+    if not code_dir.exists():
+        return ""
+
+    keywords = _extract_keywords(issue.get("title", ""), issue.get("body", "") or "")
+    if not keywords:
+        return ""
+
+    rg = shutil.which("rg")
+    hits: dict[str, int] = {}
+    for kw in keywords:
+        try:
+            if rg:
+                cmd = [rg, "-l", "--max-count", "1", "-i", "-e", kw, str(code_dir)]
+            else:
+                # git grep fallback (run inside the repo)
+                cmd = ["git", "grep", "-l", "-i", "-e", kw]
+            proc = subprocess.run(
+                cmd, cwd=str(code_dir), capture_output=True,
+                encoding="utf-8", errors="replace", timeout=20,
+            )
+            for line in (proc.stdout or "").splitlines():
+                f = line.strip()
+                if not f:
+                    continue
+                # Normalize to a path relative to code_dir for readability
+                try:
+                    rel = str(Path(f).resolve().relative_to(code_dir))
+                except (ValueError, OSError):
+                    rel = f
+                hits[rel] = hits.get(rel, 0) + 1
+        except (subprocess.SubprocessError, OSError):
+            continue
+
+    if not hits:
+        return ""
+
+    kw_lower = [k.lower() for k in keywords]
+
+    def _score(path: str, content_hits: int) -> tuple[int, int, int]:
+        """Rank: a keyword in the PATH (dir/filename) is far stronger signal than
+        a content match. Source code outranks docs/markdown. Returns
+        (is_code, path_keyword_hits, content_hits) for descending sort."""
+        pl = path.lower()
+        path_hits = sum(1 for k in kw_lower if k in pl)
+        is_code = 0 if (pl.endswith(".md") or "/docs/" in pl or pl.startswith("docs/")) else 1
+        return (is_code, path_hits, content_hits)
+
+    ranked = sorted(
+        hits.items(),
+        key=lambda kv: (-_score(kv[0], kv[1])[0], -_score(kv[0], kv[1])[1],
+                        -_score(kv[0], kv[1])[2], kv[0]),
+    )
+    # Prefer files whose path matched a keyword; if there are enough of those,
+    # drop pure content-only matches entirely (they're usually noise).
+    path_matched = [(f, n) for f, n in ranked if _score(f, n)[1] > 0]
+    chosen = path_matched[:15] if path_matched else ranked[:12]
+
+    def _label(f: str, n: int) -> str:
+        ph = _score(f, n)[1]
+        tag = "路径命中" if ph else "内容命中"
+        return f"- `{f}`（{tag}）"
+
+    lines = "\n".join(_label(f, n) for f, n in chosen)
+    kw_str = "、".join(keywords)
+    return (
+        "\n## 🔎 预搜索：候选文件（优先从这些文件读起，减少全库探索）\n\n"
+        f"我已把需求里的业务词翻译成代码关键词（{kw_str}），在 `{surface}` 代码目录预搜索。"
+        "下列文件**路径或内容命中**了这些关键词，**请优先打开「路径命中」的文件定位**"
+        "（路径命中通常就是目标模块），不必从零遍历整个代码库；如不相关再扩大范围：\n\n"
+        f"{lines}\n"
+    )
+
 
 _ASP_CONTEXT_BASE = """
 ## ASP 代码库（必须先阅读再写结论）
@@ -94,7 +304,7 @@ ASP Debug（平台/环境/问题类别 + Evidence Gate）: `skills/contract_debu
    `python tools/smart_pr.py --issue {{number}} --surface {{primary_surface}}`
    不要在 comment 中讨论其他 git/PR 流程。
 5. **待确认**：仅**产品口径**歧义（需求矛盾、业务规则不清）可列「待确认（产品）」并注明走 `workflow_asp_pr_review_feedback` 私信需求负责人。技术定位问题不得列为待确认——你必须自己读代码解决。
-6. **禁止输出分析过程**：不要输出 Goal / Progress / Next Steps / 思考过程 / 「现在我来…」；**只**输出下方 8 个正式章节。
+6. **禁止输出分析过程**：不要输出 Goal / Progress / Next Steps / 思考过程 / 「现在我来…」；**只**输出下方正式章节（从 `### 0.` 到 `### 9.`）。
 
 ## 待处理 Issue #{number}
 
@@ -110,10 +320,18 @@ ASP Debug（平台/环境/问题类别 + Evidence Gate）: `skills/contract_debu
 {comments}
 
 {routing_section}
-
+{file_hints}
 {asp_context}
 
 ## 输出（Markdown，严格按章节）
+
+### 0. 给需求方的话
+**这一章是写给提需求的非技术同事看的，必须大白话、零术语、3-5 句话。** 说清四件事：
+1. 我把这个需求理解成了什么（用产品/用户的话复述，不提代码）
+2. 打算怎么改（一句话概括，不要文件名/函数名）
+3. 改完后用户能看到什么效果
+4. 有没有风险、副作用或需要你确认的地方（没有就写「无」）
+最后附一句固定提示：「✅ 确认无误后，请给本 issue 打上 `approved-to-execute` 标签，我就会开始改代码。」
 
 ### 1. 需求概述
 2-3 句，仅复述 Issue 事实。
@@ -308,8 +526,16 @@ def _is_valid_analysis(text: str, issue_title: str = "") -> bool:
     if not text or len(text.strip()) < 200:
         return False
     lowered = text.lower()
-    # Accept both Chinese and English numbered section headers (##/### with 1.)
-    has_section = any(marker in text for marker in ("### 1.", "## 1.", "### 1、", "## 1、"))
+    # Accept both Chinese and English numbered section headers (##/### with 0. or 1.)
+    # The report now opens with "### 0. 给需求方的话" (plain-language summary for the
+    # requester); older reports start at "### 1.". Either counts as a valid structure.
+    has_section = any(
+        marker in text
+        for marker in (
+            "### 0.", "## 0.", "### 0、", "## 0、",
+            "### 1.", "## 1.", "### 1、", "## 1、",
+        )
+    )
     if not has_section:
         return False
     junk_markers = (
@@ -335,13 +561,15 @@ def _is_valid_analysis(text: str, issue_title: str = "") -> bool:
 
 
 _FINALIZE_PROMPT = (
-    "你已完成代码阅读和分析。现在将你的分析结果**严格**按以下 9 章节格式重新输出。\n\n"
+    "你已完成代码阅读和分析。现在将你的分析结果**严格**按以下 10 章节格式重新输出。\n\n"
     "格式要求（违反即失败）：\n"
-    "- 第一行必须是 `### 1. 需求概述`\n"
-    "- 依次输出 ### 1. 到 ### 9. 共 9 个章节（含「### 2. 问题分类」必须写明：操作问题/数据问题/功能问题）\n"
+    "- 第一行必须是 `### 0. 给需求方的话`\n"
+    "- `### 0. 给需求方的话` 用大白话、零术语、3-5 句话，写给非技术需求方：理解成什么/怎么改/什么效果/有无风险；"
+    "结尾固定一句「✅ 确认无误后，请给本 issue 打上 `approved-to-execute` 标签，我就会开始改代码。」\n"
+    "- 依次输出 ### 0. 到 ### 9. 共 10 个章节（含「### 2. 问题分类」必须写明：操作问题/数据问题/功能问题）\n"
     "- 禁止 Goal/Progress/Next Steps/思考过程/英文计划块\n"
     "- 禁止在章节前加任何前言或解释\n"
-    "- 直接输出 Markdown，从 `### 1. 需求概述` 开始\n"
+    "- 直接输出 Markdown，从 `### 0. 给需求方的话` 开始\n"
 )
 
 
@@ -398,6 +626,7 @@ def _build_inbound_prompt(
         body=issue.get("body", "") or "(no description)",
         comments=comments_md,
         routing_section=routing_section,
+        file_hints=_grep_hint_section(issue, primary_surface),
         asp_context=_build_asp_context(stale_surfaces),
     )
 

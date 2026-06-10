@@ -38,10 +38,13 @@ def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True, dry_run:
     if dry_run:
         print("  [DRY RUN] skipped", file=sys.stderr)
         return ""
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=60)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, cwd=cwd, timeout=60,
+        encoding="utf-8", errors="replace",
+    )
     if check and result.returncode != 0:
-        raise RuntimeError(f"Command failed: {result.stderr.strip()}")
-    return result.stdout.strip()
+        raise RuntimeError(f"Command failed: {(result.stderr or '').strip()}")
+    return (result.stdout or "").strip()
 
 
 def resolve_surface(surface_name: str, config: dict) -> dict[str, Any]:
@@ -72,11 +75,35 @@ def main() -> None:
     reviewers = surface.get("default_reviewers", [])
     branch_name = branch_pattern.format(issue_number=args.issue, surface=args.surface)
 
-    print(f"Surface: {args.surface}")
-    print(f"Repo: {repo}")
-    print(f"Base branch: {base_branch}")
-    print(f"PR branch: {branch_name}")
-    print(f"Reviewers: {reviewers}")
+    # PR 指派人（assignee）：默认指派给该 surface 的负责人，便于本人跟进。
+    # 来源用 default_reviewers（它们是正确的 GitHub 数字 login，如 app/admin 的
+    # "1401554949"），而非 team_lead（那是 "hujianfei" 这种名字，不是 GitHub
+    # login，gh --assignee 会失败）。assignee 与 reviewer 不同：可以指给自己。
+    assignees = list(reviewers)
+
+    # 剔除 PR 作者本人（仅针对 reviewer）：GitHub 不允许请求自己 review 自己的
+    # PR，否则 gh pr create 的 reviewer 请求会报错。assignee 不受此限制，保留。
+    # 当 lead 自己既是 operator 又是 default_reviewer 时（如 admin/app），
+    # 这一步避免无意义的自我 review 请求。best-effort：查不到就保持原样。
+    try:
+        self_login = run(["gh", "api", "user", "--jq", ".login"])
+        if self_login:
+            filtered = [r for r in reviewers if r != self_login]
+            if len(filtered) != len(reviewers):
+                print(f"已从 reviewers 中剔除 PR 作者本人 ({self_login})", file=sys.stderr)
+            reviewers = filtered
+    except RuntimeError as e:
+        print(f"无法解析当前用户，reviewers 保持原样：{e}", file=sys.stderr)
+
+    # 人类可读的提示一律打到 stderr，stdout 只保留最后那段纯 JSON，
+    # 否则 Pipeline D（issue_executor）用 json.loads(proc.stdout) 解析会失败，
+    # 导致拿不到 pr_url（日志里显示 "PR 已创建：unknown"）。
+    print(f"Surface: {args.surface}", file=sys.stderr)
+    print(f"Repo: {repo}", file=sys.stderr)
+    print(f"Base branch: {base_branch}", file=sys.stderr)
+    print(f"PR branch: {branch_name}", file=sys.stderr)
+    print(f"Reviewers: {reviewers}", file=sys.stderr)
+    print(f"Assignees: {assignees}", file=sys.stderr)
 
     # Get issue title for PR title
     pr_title = args.title
@@ -104,6 +131,8 @@ def main() -> None:
     ]
     for reviewer in reviewers:
         pr_cmd.extend(["--reviewer", reviewer])
+    for assignee in assignees:
+        pr_cmd.extend(["--assignee", assignee])
 
     result = run(pr_cmd, dry_run=args.dry_run)
 
@@ -113,6 +142,7 @@ def main() -> None:
         "base_branch": base_branch,
         "branch": branch_name,
         "reviewers": reviewers,
+        "assignees": assignees,
         "pr_url": result if result else "(dry-run)",
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))

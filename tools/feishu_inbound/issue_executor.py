@@ -25,7 +25,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
 import re
@@ -43,6 +42,34 @@ _STATE_FILE = _ASP_ROOT / "state" / "issue_executor_state.json"
 _STATE_LOCK = _ASP_ROOT / "state" / "issue_executor_state.lock"
 
 
+# ---------------------------------------------------------------------------
+# Cross-platform advisory file lock — POSIX uses fcntl.flock, Windows uses
+# msvcrt.locking. The branch keeps the macOS/Linux path identical to before
+# while letting the executor import and run on Windows.
+# ---------------------------------------------------------------------------
+if sys.platform == "win32":
+    import msvcrt
+
+    def _lock_file(lf) -> None:
+        # msvcrt locks a byte range from the current position; ensure 1 byte exists.
+        lf.write("lock")
+        lf.flush()
+        lf.seek(0)
+        msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
+
+    def _unlock_file(lf) -> None:
+        lf.seek(0)
+        msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _lock_file(lf) -> None:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+
+    def _unlock_file(lf) -> None:
+        fcntl.flock(lf, fcntl.LOCK_UN)
+
+
 def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
     """Atomic read-merge-write of a single issue key under exclusive lock.
 
@@ -50,7 +77,7 @@ def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
     """
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(_STATE_LOCK, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
+        _lock_file(lf)
         try:
             state: dict[str, Any] = {}
             if _STATE_FILE.exists():
@@ -60,27 +87,8 @@ def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
             with open(_STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)
         finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
+            _unlock_file(lf)
 
-
-def _merge_state_entry(issue_key: str, entry: dict[str, Any]) -> None:
-    """Atomic read-merge-write of a single issue key under exclusive lock.
-
-    Safe for parallel subprocesses: each only touches its own key.
-    """
-    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(_STATE_LOCK, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
-            state: dict[str, Any] = {}
-            if _STATE_FILE.exists():
-                with open(_STATE_FILE, encoding="utf-8") as f:
-                    state = json.load(f)
-            state[issue_key] = entry
-            with open(_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
 
 _WORKTREE_ROOT = Path(
     os.getenv("ASP_WORKTREE_ROOT", str(Path.home() / "CursorWorks" / "rootgrove"))
@@ -92,9 +100,14 @@ sys.path.insert(0, str(_SCRIPT_DIR))
 from routing import (  # noqa: E402
     DIFFICULTY_ROUTING_PROFILES,
     run_gh,
+    surface_repos_for_operator,
 )
 
-REPO = "AI-MYG/asp-backend"
+# Surface repo selected via ASP_SURFACE_REPO so Pipeline D can execute issues on
+# any surface (app/admin/...) instead of a hardcoded backend. The top-level run
+# resolves the operator's repos from config/surfaces.yaml and dispatches one
+# child per repo (each child sees ASP_SURFACE_REPO in its env).
+REPO = os.getenv("ASP_SURFACE_REPO", "AI-MYG/asp-backend")
 
 from inbound_agent import (  # noqa: E402
     ISSUE_TYPE_DATA,
@@ -120,7 +133,27 @@ _APPROVED_LABEL = "approved-to-execute"
 _LOCK_LABEL = "execution-in-progress"
 _EXECUTED_LABEL = "executed"
 _FAILED_LABEL = "execution-failed"
+_REVIEW_FAILED_LABEL = "review-failed"
 _MAX_PARALLEL = int(os.getenv("MAX_PARALLEL_EXECUTORS", "3"))
+
+# AI code-review loop config (Pipeline D): a second agent checks the diff
+# against the analysis before push/PR. Default on; tunable via .env.
+_REVIEW_ENABLED = os.getenv("ASP_REVIEW_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+_REVIEW_MAX_ROUNDS = int(os.getenv("ASP_REVIEW_MAX_ROUNDS", "2"))
+_REVIEW_MODEL = os.getenv("ASP_REVIEW_MODEL", "").strip()
+
+# 跳过原因 → 中文说明（让 logs/executor_*.log 能直接看出每个 issue 为何没执行）
+_SKIP_REASON_CN: dict[str, str] = {
+    "skip": "已执行过（带 executed 标签），跳过",
+    "skip_locked": "正在被其他进程执行（execution-in-progress 锁），跳过",
+    "skip_no_analysis": "缺少分析报告（没有 analyzed 标签或 Analysis 评论），跳过",
+    "skip_pending_approval": "非 trivial 难度，等待人工加 approved-to-execute 标签，跳过",
+    "skip_product_ambiguity": "存在未解决的产品歧义，跳过",
+    "skip_operational": "运维类 issue，无需写代码，跳过",
+    "skip_data_pending_approval": "数据类 issue，等待 approved-to-execute 标签，跳过",
+    "skip_has_pr": "已存在关联 PR，跳过",
+    "skip_failed": "上次执行失败/审查未过（execution-failed 或 review-failed），留给人工，不自动重试",
+}
 
 # ---------------------------------------------------------------------------
 # Surface worktree mapping (mirrors team_registry / config)
@@ -133,6 +166,38 @@ _SURFACE_WORKTREE: dict[str, str] = {
     "websites": "projects/asp/websites",
     "canonical": "projects/asp/canonical",
 }
+
+
+def _surface_local_paths() -> dict[str, str]:
+    """Read surface → local_path from config/surfaces.yaml (SSOT).
+
+    Falls back to the hardcoded _SURFACE_WORKTREE when surfaces.yaml is
+    unreadable, so behavior degrades gracefully without PyYAML.
+    """
+    try:
+        import yaml
+
+        cfg_path = _ASP_ROOT / "config" / "surfaces.yaml"
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        out: dict[str, str] = {}
+        for name, cfg in (data.get("surfaces") or {}).items():
+            lp = (cfg or {}).get("local_path")
+            if lp:
+                out[name] = str(lp)
+        return out or dict(_SURFACE_WORKTREE)
+    except (ImportError, OSError):
+        return dict(_SURFACE_WORKTREE)
+
+
+def _resolve_surface_repo(worktree_dir: str) -> Path:
+    """Resolve a worktree dir to an absolute repo path.
+
+    Absolute local_path values (e.g. a Windows path in surfaces.yaml) are used
+    as-is; relative ones are joined under ASP_WORKTREE_ROOT (legacy behavior).
+    """
+    p = Path(worktree_dir)
+    return p.resolve() if p.is_absolute() else (_WORKTREE_ROOT / p).resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +221,41 @@ class ExecutionSpec:
 # ---------------------------------------------------------------------------
 def _operator() -> str:
     return (os.getenv("GITHUB_ASSIGNEE") or "369795172").strip()
+
+
+def _dispatch_per_repo(repos: list[str], operator: str) -> bool:
+    """Re-exec this script once per surface repo, with ASP_SURFACE_REPO pinned.
+
+    The top-level invocation has no repo pinned (module ``REPO`` defaulted at
+    import), so we re-exec one child per resolved repo with the repo in env.
+    Children see ASP_SURFACE_REPO and run the real work. Returns True so the
+    caller returns immediately.
+    """
+    passthrough: list[str] = []
+    skip_next = False
+    for a in sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--repo":
+            skip_next = True
+            continue
+        if a.startswith("--repo="):
+            continue
+        passthrough.append(a)
+
+    rc = 0
+    for repo in repos:
+        print(f"\n{'#'*60}\n# 仓库：{repo}  （操作人={operator}）\n{'#'*60}")
+        env = {**os.environ, "ASP_SURFACE_REPO": repo, "GITHUB_ASSIGNEE": operator}
+        proc = sp.run(
+            [sys.executable, str(Path(__file__).resolve()), *passthrough],
+            env=env,
+        )
+        rc = rc or proc.returncode
+    if rc:
+        sys.exit(rc)
+    return True
 
 
 def _issue_labels(issue: dict[str, Any]) -> list[str]:
@@ -282,7 +382,12 @@ def parse_analysis_comment(
     surface = _parse_surface_from_execution(exec_section or analysis)
     # Always use backend issue number for branch — matches Smart PR --issue
     branch = f"issue-{issue_number}/{surface}"
-    worktree_dir = _SURFACE_WORKTREE.get(surface, f"projects/asp/{surface}")
+    # Prefer surfaces.yaml local_path (SSOT, may be absolute); fall back to the
+    # hardcoded mapping when not present.
+    _local_paths = _surface_local_paths()
+    worktree_dir = _local_paths.get(surface) or _SURFACE_WORKTREE.get(
+        surface, f"projects/asp/{surface}"
+    )
 
     # Check product ambiguity
     ambiguity_section = ""
@@ -330,6 +435,7 @@ def needs_execution(
       'skip_no_analysis'      — no Analysis comment found
       'skip_pending_approval' — non-trivial, awaiting approved-to-execute label
       'skip_product_ambiguity'— product ambiguity unresolved
+      'skip_failed'           — previously failed/review-failed, left for a human
     """
     if force:
         return "execute"
@@ -338,6 +444,11 @@ def needs_execution(
 
     if _EXECUTED_LABEL in labels:
         return "skip"
+    # 失败后不自动重试：execution-failed / review-failed 的 issue 交给人工处理，
+    # 定时任务不再反复重跑（避免浪费 AI 额度、反复刷屏）。人工修复后可手动
+    # 去掉失败标签、或用 --force 重跑。
+    if _FAILED_LABEL in labels or _REVIEW_FAILED_LABEL in labels:
+        return "skip_failed"
     if _LOCK_LABEL in labels:
         return "skip_locked"
     if _ANALYZED_LABEL not in labels:
@@ -411,6 +522,195 @@ def _build_execution_prompt(
         workdir=workdir,
         branch=spec.branch,
     )
+
+
+# ---------------------------------------------------------------------------
+# AI code-review loop: a second agent checks the diff against the analysis
+# before the change is pushed / a PR is opened.
+# ---------------------------------------------------------------------------
+_REVIEW_PROMPT = """判断下面的代码改动是否正确实现了下面的需求。只输出一个 JSON 对象，第一个字符必须是 {{，不要 markdown、不要解释。
+
+需求（推荐方案）：
+{analysis}
+
+代码改动（git diff）：
+{diff}
+
+输出格式：{{"verdict": "符合" 或 "不符合", "summary": "一两句结论", "issues": [{{"file": "路径", "problem": "问题", "suggestion": "建议"}}]}}
+符合时 issues 用 []。直接输出 JSON。
+"""
+
+_REWORK_PROMPT = """你之前对 Issue #{number} 的代码实现**未通过审查**。请根据审查意见修正代码。
+
+## 硬性规则
+1. 只修正审查指出的问题，不要扩大改动范围。
+2. 修正后用 `git add` 添加改动并 `git commit -m "fix: #{number} — 按审查意见修正"` 提交。
+3. 不要运行 deploy / migration / 生产操作。
+
+## 原需求分析报告（推荐方案）
+{analysis}
+
+## 上一轮审查发现的问题
+{review_issues}
+
+## 工作环境
+- 工作目录: `{workdir}`
+- 分支: `{branch}`（已 checkout）
+
+直接开始修正。完成后 git add + git commit。不要输出分析过程。
+"""
+
+
+def _get_diff(worktree_path: Path, base_branch: str) -> str:
+    """Return the diff of the issue branch against its base (read-only)."""
+    result = sp.run(
+        ["git", "diff", f"origin/{base_branch}...HEAD"],
+        cwd=worktree_path, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    diff = result.stdout or ""
+    # Cap to keep the review prompt within a sane size.
+    max_chars = int(os.getenv("ASP_REVIEW_DIFF_MAX_CHARS", "60000"))
+    if len(diff) > max_chars:
+        diff = diff[:max_chars] + "\n...(diff truncated)"
+    return diff
+
+
+def _post_comment(number: int, body: str) -> None:
+    """Post a comment to the issue (best-effort, never fatal)."""
+    try:
+        run_gh("issue", "comment", str(number), "-R", REPO, "--body", body)
+    except RuntimeError as e:
+        print(f"  Warning: could not post comment to #{number}: {e}")
+
+
+def _parse_review_verdict(text: str) -> dict[str, Any]:
+    """Parse the review agent's JSON verdict, tolerating extra prose / fences."""
+    if not text:
+        return {"verdict": "不符合", "summary": "审查无输出", "issues": []}
+    # Strip ```json fences if present
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", cleaned).strip()
+    # Try whole-string, then the first {...} block
+    candidates = [cleaned]
+    m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if m:
+        candidates.append(m.group(0))
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+            if isinstance(obj, dict) and "verdict" in obj:
+                obj.setdefault("summary", "")
+                obj.setdefault("issues", [])
+                return obj
+        except (json.JSONDecodeError, ValueError):
+            continue
+    # No parseable JSON — fall back to keyword sniffing so a model that ignored
+    # the format but clearly said pass/fail still yields the right verdict.
+    low = cleaned.lower()
+    fail_kw = ("不符合", "fail", "rejected", "not pass", "does not", "未通过", "✗", "❌")
+    pass_kw = ("符合", "pass", "approved", "lgtm", "通过", "✓", "✅")
+    if any(k in cleaned or k in low for k in fail_kw):
+        return {"verdict": "不符合", "summary": cleaned[:300], "issues": []}
+    if any(k in cleaned or k in low for k in pass_kw):
+        return {"verdict": "符合", "summary": cleaned[:300], "issues": []}
+    # Truly unparseable → treat as fail so a human looks at it
+    return {"verdict": "不符合", "summary": f"审查输出无法解析：{text[:200]}", "issues": []}
+
+
+def _format_review_issues(issues: list[dict[str, Any]]) -> str:
+    if not issues:
+        return "（无具体条目）"
+    lines = []
+    for i, it in enumerate(issues, 1):
+        f = it.get("file", "?")
+        p = it.get("problem", "")
+        s = it.get("suggestion", "")
+        lines.append(f"{i}. `{f}` — {p}" + (f"\n   建议：{s}" if s else ""))
+    return "\n".join(lines)
+
+
+def _run_review_loop(
+    issue: dict[str, Any],
+    spec: ExecutionSpec,
+    worktree_path: Path,
+    base_branch: str,
+) -> bool:
+    """Review the diff vs the analysis; rework on failure up to N rounds.
+
+    Returns True if the change passes review (ready to push/PR), False if it
+    fails after _REVIEW_MAX_ROUNDS rounds (issue is marked review-failed and
+    left for a human). Each round's verdict is posted to the issue for an
+    auditable human-visible trail.
+    """
+    number = issue["number"]
+
+    for round_no in range(1, _REVIEW_MAX_ROUNDS + 1):
+        diff = _get_diff(worktree_path, base_branch)
+        if not diff.strip():
+            print(f"  审查第 {round_no} 轮：diff 为空，无需审查")
+            return True
+
+        print(f"  审查第 {round_no}/{_REVIEW_MAX_ROUNDS} 轮（模型={_REVIEW_MODEL or 'default'}）...")
+        review_prompt = _REVIEW_PROMPT.format(
+            analysis=spec.analysis_full_text, diff=diff,
+        )
+        review = AgentClient(model=_REVIEW_MODEL or "default").run(
+            review_prompt,
+            intent="review",
+            workdir=str(worktree_path),
+            timeout_sec=min(int(os.getenv("AGENT_CLIENT_TIMEOUT", "3600")), 900),
+            model=_REVIEW_MODEL or None,
+        )
+
+        if review.status != "success":
+            print(f"  审查 Agent 执行失败：{review.error} —— 视为未通过")
+            verdict = {"verdict": "不符合", "summary": f"审查 Agent 执行失败：{review.error}", "issues": []}
+        else:
+            verdict = _parse_review_verdict(review.text)
+
+        passed = str(verdict.get("verdict", "")).strip() == "符合"
+        issues_md = _format_review_issues(verdict.get("issues", []))
+
+        # Audit trail on the issue
+        _post_comment(
+            number,
+            f"## 🔍 AI 代码审查（第 {round_no}/{_REVIEW_MAX_ROUNDS} 轮）\n\n"
+            f"**结论**：{'✅ 符合需求' if passed else '❌ 不符合需求'}\n\n"
+            f"**总体**：{verdict.get('summary', '')}\n\n"
+            f"**问题清单**：\n{issues_md}\n",
+        )
+
+        if passed:
+            print(f"  第 {round_no} 轮审查通过")
+            return True
+
+        if round_no < _REVIEW_MAX_ROUNDS:
+            print(f"  审查未通过 —— 要求返工（第 {round_no} 轮）...")
+            rework_prompt = _REWORK_PROMPT.format(
+                number=number,
+                analysis=spec.analysis_full_text,
+                review_issues=issues_md,
+                workdir=str(worktree_path),
+                branch=spec.branch,
+            )
+            rework = AgentClient().run(
+                rework_prompt,
+                intent="execution",
+                workdir=str(worktree_path),
+                timeout_sec=min(int(os.getenv("AGENT_CLIENT_TIMEOUT", "3600")), 1200),
+            )
+            if rework.status != "success":
+                print(f"  返工 Agent 执行失败：{rework.error}")
+                _add_label(number, _REVIEW_FAILED_LABEL, dry_run=False)
+                return False
+        else:
+            print(f"  审查 {_REVIEW_MAX_ROUNDS} 轮后仍未通过 —— 转交人工")
+            _add_label(number, _REVIEW_FAILED_LABEL, dry_run=False)
+            return False
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +823,7 @@ def _create_issue_worktree(
         result = sp.run(
             ["git", "branch", "-r", "--list", f"origin/{branch}"],
             cwd=surface_repo, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
 
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
@@ -530,11 +831,13 @@ def _create_issue_worktree(
             sp.run(
                 ["git", "worktree", "add", "-B", branch, str(worktree_path), f"origin/{branch}"],
                 cwd=surface_repo, check=True, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
             )
         else:
             sp.run(
                 ["git", "worktree", "add", "-b", branch, str(worktree_path), f"origin/{base_branch}"],
                 cwd=surface_repo, check=True, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
             )
         return worktree_path
     except sp.CalledProcessError as e:
@@ -548,6 +851,7 @@ def _remove_issue_worktree(surface_repo: Path, worktree_path: Path) -> None:
         sp.run(
             ["git", "worktree", "remove", "--force", str(worktree_path)],
             cwd=surface_repo, capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace",
         )
     except (sp.CalledProcessError, sp.TimeoutExpired):
         pass
@@ -559,6 +863,7 @@ def _push_branch(worktree_path: Path, branch: str) -> bool:
         sp.run(
             ["git", "push", "-u", "origin", branch],
             cwd=worktree_path, check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=120,
         )
         return True
@@ -573,6 +878,7 @@ def _has_changes(worktree_path: Path) -> bool:
     result = sp.run(
         ["git", "status", "--porcelain"],
         cwd=worktree_path, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     return bool(result.stdout.strip())
 
@@ -582,6 +888,7 @@ def _has_commits_ahead(worktree_path: Path, base_branch: str) -> bool:
     result = sp.run(
         ["git", "log", f"origin/{base_branch}..HEAD", "--oneline"],
         cwd=worktree_path, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     return bool(result.stdout.strip())
 
@@ -616,47 +923,49 @@ def execute_issue(
     title = issue.get("title", "")
 
     print(f"\n{'='*60}")
-    print(f"Executing #{number}: {title}")
-    print(f"  Surface: {spec.surface}, Branch: {spec.branch}")
-    print(f"  Scope: {spec.scope}, Files: {len(spec.affected_files)}")
+    print(f"开始执行 #{number}：{title}")
+    print(f"  surface={spec.surface}，分支={spec.branch}")
+    print(f"  scope={spec.scope}，涉及文件 {len(spec.affected_files)} 个")
     print(f"{'='*60}")
 
-    surface_repo = _WORKTREE_ROOT / spec.worktree_dir
+    surface_repo = _resolve_surface_repo(spec.worktree_dir)
     if not surface_repo.exists():
-        print(f"  Error: surface repo does not exist: {surface_repo}")
+        print(f"  错误：surface 仓库不存在：{surface_repo}")
         return None
 
     base_branch = _SURFACE_BASE_BRANCH.get(spec.surface, "main")
 
     if dry_run:
         wt_path = _WORKTREE_DIR / f"issue-{number}"
-        print(f"  [DRY RUN] Surface repo: {surface_repo}")
-        print(f"  [DRY RUN] Worktree: {wt_path}")
-        print(f"  [DRY RUN] Branch: {spec.branch} from {base_branch}")
-        print(f"  [DRY RUN] Affected files: {spec.affected_files}")
-        print(f"  [DRY RUN] Plan:\n{spec.plan_text[:500]}")
+        print(f"  [试运行] surface 仓库：{surface_repo}")
+        print(f"  [试运行] worktree：{wt_path}")
+        print(f"  [试运行] 分支：{spec.branch}（基于 {base_branch}）")
+        print(f"  [试运行] 涉及文件：{spec.affected_files}")
+        print(f"  [试运行] 方案：\n{spec.plan_text[:500]}")
         return {"status": "dry_run"}
 
-    # 1. Acquire lock
+    # 1. 加锁，防止同一 issue 被并发执行
+    print(f"  [步骤 1/8] 加执行锁（execution-in-progress）...")
     if not _acquire_lock(number, dry_run=False):
-        print(f"  #{number}: locked (execution-in-progress), skipping")
+        print(f"  #{number}：已被锁定（execution-in-progress），跳过")
         return None
 
     issue_worktree: Path | None = None
     try:
-        # 2. Create isolated worktree for this issue
+        # 2. 为该 issue 创建独立 worktree
+        print(f"  [步骤 2/8] 创建独立 worktree（分支 {spec.branch}，基于 {base_branch}）...")
         issue_worktree = _create_issue_worktree(
             surface_repo, spec.branch, base_branch, number, skip_fetch=skip_fetch,
         )
         if not issue_worktree:
-            print(f"  Failed to create worktree for {spec.branch}")
+            print(f"  创建 worktree 失败：{spec.branch}")
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
-        print(f"  Worktree created: {issue_worktree}")
+        print(f"  worktree 已创建：{issue_worktree}")
 
-        # 3. Run agent
+        # 3. 调用 Agent 按方案写代码
         if AgentClient is None:
-            print("  Error: AgentClient not importable")
+            print("  错误：AgentClient 无法导入")
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
 
@@ -665,7 +974,7 @@ def execute_issue(
         if spec.scope == "S":
             timeout = min(timeout, 1200)
 
-        print(f"  Running AgentClient (workdir={issue_worktree}, timeout={timeout}s)...")
+        print(f"  [步骤 3/8] 调用 Agent 写代码（工作目录={issue_worktree}，超时={timeout}秒）...")
         result = AgentClient().run(
             prompt,
             intent="execution",
@@ -674,30 +983,42 @@ def execute_issue(
         )
 
         if result.status != "success":
-            print(f"  Agent execution failed: {result.error}")
+            print(f"  Agent 执行失败：{result.error}")
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
 
-        print(f"  Agent completed: {result.executor}/{result.model or 'default'} ({result.elapsed_sec}s)")
+        print(f"  Agent 完成：{result.executor}/{result.model or 'default'}（耗时 {result.elapsed_sec}秒）")
 
-        # 4. Verify changes exist
+        # 4. 校验确实产生了代码改动
+        print(f"  [步骤 4/8] 校验是否有代码改动...")
         if not _has_commits_ahead(issue_worktree, base_branch) and not _has_changes(issue_worktree):
-            print(f"  Warning: no changes detected after agent execution")
+            print(f"  警告：Agent 执行后未检测到任何代码改动")
             _add_label(number, _FAILED_LABEL, dry_run=False)
             return None
 
-        # 4.5. Push branch to remote (required before PR creation)
+        # 4.2. AI code review loop — a second agent checks the diff against the
+        # analysis before we push/PR. On failure it reworks up to N rounds; if
+        # it still doesn't pass, the issue is left (review-failed) for a human.
+        if _REVIEW_ENABLED:
+            print(f"  [步骤 5/8] AI 代码审查（最多 {_REVIEW_MAX_ROUNDS} 轮）...")
+            if not _run_review_loop(issue, spec, issue_worktree, base_branch):
+                print(f"  #{number}：未通过 AI 审查 → 不推送，转交人工")
+                return None
+        else:
+            print(f"  [步骤 5/8] AI 审查已关闭（ASP_REVIEW_ENABLED=false），跳过")
+
+        # 4.5. 推送分支到远端（创建 PR 前必须）
         if not skip_pr:
-            print(f"  Pushing branch {spec.branch} to remote...")
+            print(f"  [步骤 6/8] 推送分支 {spec.branch} 到远端...")
             if not _push_branch(issue_worktree, spec.branch):
-                print(f"  Push failed, not marking as executed")
+                print(f"  推送失败，不标记为已执行")
                 _add_label(number, _FAILED_LABEL, dry_run=False)
                 return None
 
         # 5. Smart PR
         pr_result: dict[str, Any] = {}
         if not skip_pr:
-            print(f"  Running Smart PR (--issue {number} --surface {spec.surface})...")
+            print(f"  [步骤 7/8] 创建 Smart PR（--issue {number} --surface {spec.surface}）...")
             smart_pr_path = _ASP_ROOT / "tools" / "smart_pr.py"
             model_tag = f"{result.executor}/{result.model}" if result.model else result.executor
             cmd = [
@@ -712,27 +1033,29 @@ def execute_issue(
                     cmd,
                     cwd=str(issue_worktree),
                     capture_output=True, text=True, timeout=120,
+                    encoding="utf-8", errors="replace",
                 )
                 if proc.returncode == 0:
                     try:
                         pr_result = json.loads(proc.stdout)
                     except json.JSONDecodeError:
                         pr_result = {"raw_output": proc.stdout[:500]}
-                    print(f"  PR created: {pr_result.get('pr_url', 'unknown')}")
+                    print(f"  PR 已创建：{pr_result.get('pr_url', 'unknown')}")
                 else:
-                    print(f"  Smart PR failed (exit {proc.returncode}): {proc.stderr[:300]}")
+                    print(f"  Smart PR 失败（退出码 {proc.returncode}）：{proc.stderr[:300]}")
                     _add_label(number, _FAILED_LABEL, dry_run=False)
                     return None
             except sp.TimeoutExpired:
-                print(f"  Smart PR timed out")
+                print(f"  Smart PR 超时")
                 _add_label(number, _FAILED_LABEL, dry_run=False)
                 return None
         else:
-            print(f"  Skipping PR (--skip-pr)")
+            print(f"  跳过 PR（--skip-pr）")
 
-        # 6. Mark success
+        # 6. 标记成功
+        print(f"  [步骤 8/8] 标记 executed 标签...")
         _add_label(number, _EXECUTED_LABEL, dry_run=False)
-        print(f"  #{number}: execution complete")
+        print(f"  ✅ #{number}：执行完成")
 
         now_iso = datetime.now(timezone.utc).isoformat()
         return {
@@ -810,20 +1133,53 @@ def main() -> None:
                         help="Skip git fetch in worktree creation (used by parallel parent)")
     parser.add_argument("--batch", type=int, default=1, help="Max issues per run (default: 1)")
     parser.add_argument("--parallel", action="store_true", help="Process multiple issues in parallel")
+    parser.add_argument("--repo", help="Target a single surface repo (e.g. AI-MYG/asp-app); "
+                                       "default: auto-resolve all repos you own from surfaces.yaml")
+    parser.add_argument("--approve", type=int, metavar="ISSUE",
+                        help="Human approval shortcut: add the 'approved-to-execute' label to "
+                             "ISSUE so Pipeline D will execute it. Requires --repo.")
     args = parser.parse_args()
 
     _load_env()
     token = os.getenv("GITHUB_TOKEN")
     if not token:
-        print("Error: GITHUB_TOKEN not set")
+        print("错误：未设置 GITHUB_TOKEN 环境变量")
         sys.exit(1)
 
     operator = _operator()
 
+    # --- Human approval shortcut ----------------------------------------
+    # `--approve N --repo R` just stamps the approved-to-execute label so the
+    # requester can confirm a requirement with one command after reading the
+    # plain-language summary. No execution happens here.
+    if args.approve is not None:
+        repo = args.repo or os.getenv("ASP_SURFACE_REPO")
+        if not repo:
+            print("错误：--approve 需要配合 --repo（例如 --repo AI-MYG/asp-app）")
+            sys.exit(1)
+        try:
+            run_gh("issue", "edit", str(args.approve), "-R", repo,
+                   "--add-label", _APPROVED_LABEL)
+            print(f"✅ 已批准 {repo} 的 #{args.approve}，添加了 '{_APPROVED_LABEL}' 标签。"
+                  f"Pipeline D 下次运行时会自动执行。")
+        except RuntimeError as e:
+            print(f"批准 #{args.approve} 出错：{e}")
+            sys.exit(1)
+        return
+
+    # --- Multi-repo dispatch ---------------------------------------------
+    # Top-level invocation (no ASP_SURFACE_REPO pinned) resolves the repos this
+    # operator owns and re-execs one child per repo with the repo in env.
+    # Children (env already set) fall through and execute against that repo.
+    if not os.getenv("ASP_SURFACE_REPO"):
+        repos = [args.repo] if args.repo else surface_repos_for_operator(operator)
+        if _dispatch_per_repo(repos, operator):
+            return
+
     try:
         issues = fetch_assigned_issues(args.issue, operator=operator)
     except (RuntimeError, ValueError) as e:
-        print(f"Error: {e}")
+        print(f"错误：{e}")
         sys.exit(1)
 
     issues.sort(key=lambda i: i.get("createdAt", ""), reverse=True)
@@ -841,64 +1197,71 @@ def main() -> None:
 
         action = needs_execution(issue, comments, args.force)
         if action != "execute":
-            reason = action.replace("skip_", "").replace("skip", "already executed")
-            print(f"  #{number}: {reason}")
+            reason = _SKIP_REASON_CN.get(action, action)
+            print(f"  跳过 #{number}：{reason}")
             continue
 
         spec = parse_analysis_comment(comments, number)
         if not spec:
-            print(f"  #{number}: could not parse Analysis comment")
+            print(f"  跳过 #{number}：无法解析 Analysis 分析评论")
             continue
 
-        if spec.has_product_ambiguity and not args.force:
-            print(f"  #{number}: product ambiguity unresolved, skipping")
+        # 产品歧义门禁：分析报告里若有「待确认（产品）」内容，默认不自动执行。
+        # 但人工加了 approved-to-execute 标签 = 已读过计划（含歧义问题）并确认放行，
+        # 此时按人工意愿覆盖歧义门禁继续执行（这也是你回复「解决产品歧义」后的预期行为）。
+        approved = _APPROVED_LABEL in _issue_labels(issue)
+        if spec.has_product_ambiguity and not args.force and not approved:
+            print(f"  跳过 #{number}：存在未解决的产品歧义，且未加 approved-to-execute 标签")
             continue
+        if spec.has_product_ambiguity and approved:
+            print(f"  #{number}：检测到产品歧义，但已加 approved-to-execute 标签 → 按人工确认放行")
 
+        print(f"  纳入执行队列 #{number}：surface={spec.surface} 分支={spec.branch} scope={spec.scope}")
         candidates.append((issue, spec))
 
     if not args.issue and not args.scan_only:
         candidates = candidates[: args.batch]
 
-    print(f"\nExecutor queue ({operator}): {len(issues)} analyzed, {len(candidates)} ready to execute")
+    print(f"\n执行队列（操作人 {operator}）：{len(issues)} 个已分析，{len(candidates)} 个可执行")
 
     if args.scan_only:
         for issue, spec in candidates:
             cn = _extract_central_number(issue)
             d = _get_difficulty(issue, cn)
-            print(f"  #{issue['number']}: surface={spec.surface} branch={spec.branch} "
-                  f"scope={spec.scope} difficulty={d} central={cn or '?'} files={len(spec.affected_files)}")
+            print(f"  #{issue['number']}：surface={spec.surface} 分支={spec.branch} "
+                  f"scope={spec.scope} 难度={d} 中央issue={cn or '?'} 文件数={len(spec.affected_files)}")
         return
 
     if not candidates:
-        print("Nothing to execute.")
+        print("没有可执行的 issue。")
         return
 
     if not args.dry_run and AgentClient is None:
-        print("Error: AgentClient not importable (tools/agent_client.py)")
+        print("错误：AgentClient 无法导入（tools/agent_client.py）")
         sys.exit(1)
 
-    # Worktree sync
+    # Worktree 同步
     if not args.dry_run and not args.skip_sync:
         all_surfaces = {spec.surface for _, spec in candidates}
         required = surfaces_to_sync(list(all_surfaces))
-        print(f"Syncing surfaces {required} (operator={operator})...")
+        print(f"同步 surface worktree {required}（操作人={operator}）...")
         report = sync_asp_worktrees(required, operator=operator)
         if report.stale_surfaces:
-            print(f"  Stale surfaces: {', '.join(report.stale_surfaces)}")
+            print(f"  过期的 surface：{', '.join(report.stale_surfaces)}")
 
-    # --- Parallel multi-issue via subprocess ---
+    # --- 并行多 issue（子进程） ---
     if args.parallel and len(candidates) > 1 and not args.dry_run:
-        # Pre-fetch all surfaces once to avoid concurrent git fetch conflicts
+        # 预先 fetch 所有 surface，避免并发 git fetch 冲突
         prefetched: set[str] = set()
         for _, spec in candidates:
-            surface_repo = _WORKTREE_ROOT / spec.worktree_dir
+            surface_repo = _resolve_surface_repo(spec.worktree_dir)
             if spec.surface not in prefetched and surface_repo.exists():
-                print(f"  Pre-fetching {spec.surface} ({surface_repo})...")
+                print(f"  预拉取 {spec.surface}（{surface_repo}）...")
                 _prefetch_surface(surface_repo)
                 prefetched.add(spec.surface)
 
         max_workers = min(_MAX_PARALLEL, len(candidates))
-        print(f"\n--- Parallel: {len(candidates)} issue(s), max {max_workers} concurrent ---")
+        print(f"\n--- 并行执行：{len(candidates)} 个 issue，最多 {max_workers} 个并发 ---")
 
         active: dict[int, sp.Popen] = {}
         pending = list(candidates)
@@ -922,14 +1285,22 @@ def main() -> None:
                 if args.skip_pr:
                     cmd.append("--skip-pr")
                 log_path = log_dir / f"issue_executor_{number}.log"
-                log_file = open(log_path, "w")
-                print(f"  Spawning executor for #{number} (log: {log_path.name})")
+                log_file = open(log_path, "w", encoding="utf-8")
+                print(f"  启动 #{number} 的执行子进程（日志：{log_path.name}）")
                 proc = sp.Popen(
                     cmd,
                     stdout=log_file,
                     stderr=sp.STDOUT,
                     cwd=str(_ASP_ROOT),
-                    env={**os.environ, "GITHUB_TOKEN": token, "GITHUB_ASSIGNEE": operator},
+                    # PYTHONUTF8/PYTHONIOENCODING：强制子进程以 UTF-8 输出，
+                    # 否则 Windows 默认 cp936 编码写入 utf-8 日志文件会乱码。
+                    env={
+                        **os.environ,
+                        "GITHUB_TOKEN": token,
+                        "GITHUB_ASSIGNEE": operator,
+                        "PYTHONUTF8": "1",
+                        "PYTHONIOENCODING": "utf-8",
+                    },
                 )
                 active[number] = proc
                 proc._log_file = log_file  # type: ignore[attr-defined]
@@ -940,10 +1311,10 @@ def main() -> None:
                 if ret is not None:
                     proc._log_file.close()  # type: ignore[attr-defined]
                     if ret == 0:
-                        print(f"  #{number}: executed (exit 0)")
+                        print(f"  #{number}：执行成功（退出码 0）")
                         processed += 1
                     else:
-                        print(f"  #{number}: failed (exit {ret})")
+                        print(f"  #{number}：执行失败（退出码 {ret}）")
                     done_numbers.append(number)
 
             for n in done_numbers:
@@ -952,10 +1323,10 @@ def main() -> None:
             if active:
                 time.sleep(5)
 
-        print(f"\nDone. Executed {processed} issue(s) for {operator}.")
+        print(f"\n完成。共为 {operator} 执行了 {processed} 个 issue。")
 
     else:
-        # --- Sequential ---
+        # --- 串行执行 ---
         processed = 0
         for issue, spec in candidates:
             entry = execute_issue(
@@ -966,11 +1337,11 @@ def main() -> None:
                 skip_fetch=args.skip_fetch,
             )
             if entry and entry.get("status") != "dry_run":
-                # Atomic per-key merge: safe even when called as parallel subprocess
+                # 按 key 原子合并：作为并行子进程调用时也安全
                 _merge_state_entry(str(issue["number"]), entry)
                 processed += 1
 
-        print(f"\nDone. Executed {processed} issue(s) for {operator}.")
+        print(f"\n完成。共为 {operator} 执行了 {processed} 个 issue。")
 
 
 if __name__ == "__main__":

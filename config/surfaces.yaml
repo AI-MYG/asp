@@ -25,7 +25,11 @@ surfaces:
   admin:
     repo: AI-MYG/asp-admin
     base_branch: main
-    local_path: projects/asp/admin
+    # 相对路径（git root），跟随 ASP_WORKTREE_ROOT 解析，便于 Windows/mac 通用：
+    #   Windows: .env 设 ASP_WORKTREE_ROOT=D:\work\asp  → D:\work\asp\asp-admin
+    #   macOS:   .env 设 ASP_WORKTREE_ROOT=<你的工作区>  → <工作区>/asp-admin
+    # Vue 前端在 nativesense-admin/ 子目录，agent 从此 git root 进入。
+    local_path: asp-admin
     team_lead: hujianfei
     default_reviewers:
       - "1401554949"

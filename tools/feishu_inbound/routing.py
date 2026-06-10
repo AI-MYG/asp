@@ -6,13 +6,54 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
+# Force UTF-8 stdout/stderr so printing issue titles containing emoji / CJK
+# doesn't raise UnicodeEncodeError on non-UTF-8 consoles (e.g. GBK on Chinese
+# Windows). No-op where the stream already is UTF-8 or lacks reconfigure().
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):
+        pass
+
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
+SURFACES_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "surfaces.yaml"
 REPO = "AI-MYG/asp"
 
+# Default surface repo when nothing else resolves (preserves legacy behavior).
+DEFAULT_SURFACE_REPO = "AI-MYG/asp-backend"
+
 _GH_BIN = shutil.which("gh") or "/opt/homebrew/bin/gh"
+
+
+def surface_repos_for_operator(operator: str) -> list[str]:
+    """Return the surface repos the operator owns, read from config/surfaces.yaml.
+
+    A repo is "owned" when ``operator`` (a GitHub numeric ID) appears in that
+    surface's ``default_reviewers``. Falls back to ``[DEFAULT_SURFACE_REPO]``
+    when surfaces.yaml is unreadable or no surface matches — so Pipeline C/D
+    keep working even without PyYAML or a matching operator.
+    """
+    operator = str(operator).strip()
+    try:
+        import yaml
+
+        with open(SURFACES_PATH, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (ImportError, OSError):
+        return [DEFAULT_SURFACE_REPO]
+
+    repos: list[str] = []
+    for _name, cfg in (data.get("surfaces") or {}).items():
+        reviewers = [str(r).strip() for r in (cfg or {}).get("default_reviewers", [])]
+        if operator in reviewers:
+            repo = (cfg or {}).get("repo")
+            if repo and repo not in repos:
+                repos.append(repo)
+    return repos or [DEFAULT_SURFACE_REPO]
 
 ASSIGNEE_NAMES = {
     "369795172": "袁牧",
@@ -40,11 +81,15 @@ def run_gh(*args: str, check: bool = True) -> str:
         [_GH_BIN, *args],
         capture_output=True,
         text=True,
+        # gh emits UTF-8; force it so non-UTF-8 default locales (e.g. GBK on
+        # Chinese Windows) don't raise UnicodeDecodeError and null out stdout.
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     if check and result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"gh failed: {' '.join(args)}")
-    return result.stdout.strip()
+        raise RuntimeError((result.stderr or "").strip() or f"gh failed: {' '.join(args)}")
+    return (result.stdout or "").strip()
 
 
 def load_config() -> dict[str, Any]:
