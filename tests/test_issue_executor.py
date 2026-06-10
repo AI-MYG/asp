@@ -83,6 +83,75 @@ class TestBranchNumberContract:
         assert spec.surface == "backend"
 
 
+class TestSurfaceResolution:
+    """Surface priority: exec-section branch > issue body Surface >
+    Routing comment Surface > exec-section substring > backend default.
+    Regression for AI-MYG/asp-backend#114: full-analysis substring matching
+    on file names (admin_cos_sync.py) misrouted backend → admin."""
+
+    def test_old_format_uses_issue_body_surface(self):
+        """#114 regression: no 执行路径 section, file name contains 'admin',
+        but issue body says Surface: backend → must resolve backend."""
+        comments = _wrap_analysis("""\
+### 1. 根因分析
+
+`tools/admin_cos_sync.py` 中的同步逻辑缺少 sublevel 字段，
+admin_cos_sync.py 多处出现。
+
+### 2. 推荐方案
+
+修复 admin_cos_sync.py 的字段映射。
+""")
+        issue = {"body": "**Surface**: backend\n\n问题描述……"}
+        spec = parse_analysis_comment(comments, issue_number=114, issue=issue)
+        assert spec is not None
+        assert spec.surface == "backend"
+        assert spec.branch == "issue-114/backend"
+
+    def test_exec_section_branch_pattern_wins(self):
+        comments = _wrap_analysis("""\
+### 1. 推荐方案
+
+修复问题。
+
+### 2. 执行路径
+
+- **Branch**: issue-99/admin
+""")
+        issue = {"body": "**Surface**: backend"}
+        spec = parse_analysis_comment(comments, issue_number=99, issue=issue)
+        assert spec is not None
+        assert spec.surface == "admin"
+
+    def test_routing_comment_surface_fallback(self):
+        """No exec section, no body Surface → first item of Routing Surface."""
+        comments = [
+            {"body": "## Routing\n\n- **Surface**: app, backend\n- **Owner**: x"},
+        ] + _wrap_analysis("""\
+### 1. 根因分析
+
+`tools/admin_cos_sync.py` 出现多次。
+
+### 2. 推荐方案
+
+修复。
+""")
+        issue = {"body": "没有 Surface 行的 issue body"}
+        spec = parse_analysis_comment(comments, issue_number=5, issue=issue)
+        assert spec is not None
+        assert spec.surface == "app"
+
+    def test_default_backend_when_all_missing(self):
+        comments = _wrap_analysis("""\
+### 1. 推荐方案
+
+修复某个问题。
+""")
+        spec = parse_analysis_comment(comments, issue_number=1, issue={"body": ""})
+        assert spec is not None
+        assert spec.surface == "backend"
+
+
 class TestScopeParser:
     """P2.3: scope uses re.search for S/M/L, not re.match."""
 

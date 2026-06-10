@@ -234,16 +234,56 @@ def _extract_section_by_title(text: str, keywords: str | list[str]) -> str:
     return "\n\n".join(parts)
 
 
-def _parse_surface_from_execution(section: str) -> str:
-    """Extract surface from '执行路径' section."""
-    # Look for branch pattern: issue-{N}/{surface}
-    m = re.search(r"issue-\d+/(\w+)", section)
-    if m:
-        return m.group(1)
-    # Fallback: look for worktree dir
-    for surface, wdir in _SURFACE_WORKTREE.items():
-        if wdir in section or surface in section.lower():
-            return surface
+_SURFACE_LINE_RE = re.compile(r"\*\*Surface\*\*[:：]\s*([^\n]+)")
+
+
+def _parse_surface_line(text: str) -> str | None:
+    """Extract first valid surface from a '**Surface**: xxx' line.
+
+    Accepts comma-separated lists like 'backend, admin, app' — the first
+    item is the primary surface. Returns None if absent or not a known surface.
+    """
+    m = _SURFACE_LINE_RE.search(text)
+    if not m:
+        return None
+    first = m.group(1).split(",")[0].strip().lower()
+    return first if first in _SURFACE_WORKTREE else None
+
+
+def _resolve_surface(
+    exec_section: str,
+    issue_body: str,
+    comments: list[dict[str, str]],
+) -> str:
+    """Resolve target surface with explicit signals before substring fallback.
+
+    Priority:
+      1. branch pattern issue-{N}/{surface} in the 执行路径 section
+      2. '**Surface**: xxx' line in the issue body
+      3. '**Surface**: xxx' line in a '## Routing' comment
+      4. substring match on the 执行路径 section only (never full analysis —
+         file names like admin_cos_sync.py in root-cause text would misroute)
+    """
+    if exec_section:
+        m = re.search(r"issue-\d+/(\w+)", exec_section)
+        if m:
+            return m.group(1)
+
+    surface = _parse_surface_line(issue_body)
+    if surface:
+        return surface
+
+    for c in comments:
+        body = c.get("body", "")
+        if "## Routing" in body:
+            surface = _parse_surface_line(body)
+            if surface:
+                return surface
+
+    if exec_section:
+        for surface, wdir in _SURFACE_WORKTREE.items():
+            if wdir in exec_section or surface in exec_section.lower():
+                return surface
     return "backend"
 
 
@@ -261,6 +301,7 @@ def _parse_affected_files(text: str) -> list[str]:
 def parse_analysis_comment(
     comments: list[dict[str, str]],
     issue_number: int,
+    issue: dict[str, Any] | None = None,
 ) -> ExecutionSpec | None:
     """Parse the Analysis comment into an ExecutionSpec."""
     analysis = _extract_analysis_text(comments)
@@ -278,7 +319,13 @@ def parse_analysis_comment(
         analysis, ["影响模块", "涉及文件", "关键代码", "影响范围", "Evidence"]
     )
 
-    surface = _parse_surface_from_execution(exec_section or analysis)
+    if not exec_section:
+        print(
+            "  Warning: analysis comment has no 执行路径 section, "
+            "surface inferred from issue body"
+        )
+    issue_body = (issue or {}).get("body", "") or ""
+    surface = _resolve_surface(exec_section, issue_body, comments)
     # Always use backend issue number for branch — matches Smart PR --issue
     branch = f"issue-{issue_number}/{surface}"
     worktree_dir = _SURFACE_WORKTREE.get(surface, f"projects/asp/{surface}")
@@ -901,7 +948,7 @@ def main() -> None:
             print(f"  {repo}#{number}: {reason}")
             continue
 
-        spec = parse_analysis_comment(comments, number)
+        spec = parse_analysis_comment(comments, number, issue=issue)
         if not spec:
             print(f"  {repo}#{number}: could not parse Analysis comment")
             continue
