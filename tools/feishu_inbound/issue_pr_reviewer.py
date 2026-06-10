@@ -588,18 +588,28 @@ def notify_feishu(text: str, *, dry_run: bool) -> str:
     open_id = _feishu_open_id()
     app_id = os.getenv("FEISHU_APP_ID") or os.getenv("IC_FEISHU_APP_ID", "")
     app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv("IC_FEISHU_APP_SECRET", "")
+    webhook = os.getenv("FEISHU_WEBHOOK_URL", "")
     try:
         if open_id and app_id and app_secret:
             _notify.send_feishu_dm(app_id, app_secret, open_id, text, dry_run=False)
             return "dm"
-        webhook = os.getenv("FEISHU_WEBHOOK_URL", "")
         if webhook:
             _notify.send_webhook_message(webhook, text, dry_run=False)
             return "webhook"
     except Exception as e:  # noqa: BLE001 — notification must never break gate
         print(f"  Feishu notify failed: {e}")
         return "error"
-    print("  Feishu: no open_id and no webhook configured, skipped")
+    missing = [
+        name
+        for name, val in (
+            ("open_id", open_id),
+            ("app_id (FEISHU_APP_ID/IC_FEISHU_APP_ID)", app_id),
+            ("app_secret (FEISHU_APP_SECRET/IC_FEISHU_APP_SECRET)", app_secret),
+            ("FEISHU_WEBHOOK_URL", webhook),
+        )
+        if not val
+    ]
+    print(f"  Feishu: skipped — missing {', '.join(missing)}")
     return "skipped_no_target"
 
 
