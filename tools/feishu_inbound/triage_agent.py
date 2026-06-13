@@ -132,7 +132,7 @@ def process_triage(
     labels = _issue_labels(issue)
     comments: list[dict[str, str]] = []
     if _comments_count(issue) > 0:
-        comments = fetch_issue_comments(token, number)
+        comments = fetch_issue_comments(token, number, repo=REPO)
 
     if not needs_triage(issue, comments, force):
         print(f"  #{number}: already triaged")
@@ -242,7 +242,7 @@ def main() -> None:
         comments: list[dict[str, str]] = []
         if _comments_count(issue) > 0:
             try:
-                comments = fetch_issue_comments(token, number)
+                comments = fetch_issue_comments(token, number, repo=REPO)
             except Exception:
                 pass
         if needs_triage(issue, comments, args.force):
