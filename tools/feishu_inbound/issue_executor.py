@@ -826,7 +826,6 @@ def execute_issue(
                     "--surface", spec.surface,
                     "--issue-repo", gh_repo,
                     "--model", model_tag,
-                    "--handback-requester",
                 ]
                 try:
                     proc = sp.run(

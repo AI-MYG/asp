@@ -16,10 +16,12 @@ _JOB_ALIASES = {
     "agent": "feishu_inbound_agent",
     "executor": "issue_executor",
     "reviewer": "issue_pr_reviewer",
+    "handback": "issue_dev_handback",
     "feishu_inbound_triage": "feishu_inbound_triage",
     "feishu_inbound_agent": "feishu_inbound_agent",
     "issue_executor": "issue_executor",
     "issue_pr_reviewer": "issue_pr_reviewer",
+    "issue_dev_handback": "issue_dev_handback",
 }
 
 

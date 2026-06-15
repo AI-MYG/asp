@@ -48,9 +48,28 @@ launchd_schedules:
     hours: all
     minutes: [15, 45]
     weekday_only: false
+  # Pipeline F — handback after dev CI/CD (after human merges post-E)
+  issue_dev_handback:
+    hours: all
+    minutes: [25, 55]
+    weekday_only: false
+
+# --- Pipeline F: handback after dev CI/CD succeeds ---
+# Scans review-dev-pass issues; when linked PR is merged and dev workflow succeeds,
+# assigns issue author + ready-for-acceptance label.
+pipeline_f:
+  scan:
+    org: AI-MYG
+    limit: 100
+  dev_cicd:
+    AI-MYG/asp-backend:
+      workflow: "Backend Dev Test Container"
+    AI-MYG/asp-admin:
+      workflow: "🔍 Code Quality - Vue Admin"
+    AI-MYG/asp-app:
+      workflow: "🚀 CI/CD Multi-Device Pipeline - Flutter Kiosk App"
 
 # --- Pipeline E: gate review (review only, never edits code / merges) ---
-# Delegates to a *different agent platform* than Pipeline D (not another OpenCode model).
 # PR body records D via "**Implemented by**: `opencode/glm-5.1`" → E uses cursor_sdk/composer-2.5.
 # Overrides: PIPELINE_E_REVIEW_EXECUTOR, PIPELINE_E_REVIEW_MODEL (env) > fields below.
 # Feishu DM: PIPELINE_E_FEISHU_OPEN_ID (Keychain) > team_registry marvin > FEISHU_WEBHOOK_URL.

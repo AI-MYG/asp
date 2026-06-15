@@ -7,6 +7,7 @@ platform different from Pipeline D** (e.g. Cursor Composer 2.5 when D used
 OpenCode), and applies a state machine:
 
   PASS    → add ``review-dev-pass`` (keep ``executed``); never merge; Feishu DM.
+            Handback to requester happens in Pipeline F after dev CI/CD succeeds.
   CHANGES → remove ``executed`` + add ``review-changes-requested``; post a
             ``## Pipeline E Gate Review`` comment that Pipeline D reads on its
             next revision round; Feishu DM with the business-language reason.
@@ -790,7 +791,9 @@ def review_issue(
                 number, repo,
                 f"{_APPROVED_MARKER}\n\n"
                 f"_审查 Agent `{review_agent}` ≠ 执行 Agent `{d_agent}`。_\n\n"
-                f"{review_text}\n\n---\n_Pipeline E gate passed. 不自动合并；等待人工合入 dev。_",
+                f"{review_text}\n\n---\n"
+                f"_Pipeline E gate passed. 不自动合并；等待人工合入 dev。"
+                f"合入且 dev CI/CD 成功后由 Pipeline F 指派提需人验收。_",
                 dry_run=False,
             )
         elif verdict == _VERDICT_CHANGES:

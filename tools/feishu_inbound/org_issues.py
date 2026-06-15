@@ -234,3 +234,89 @@ def fetch_org_assigned_issues(
     if label:
         q += f"+label:{label}"
     return _search_issues(q, limit=max_items)
+
+
+def fetch_org_labeled_issues(
+    *,
+    org: str | None = None,
+    include_labels: list[str] | None = None,
+    exclude_labels: list[str] | None = None,
+    issue_number: int | None = None,
+    repo: str | None = None,
+    limit: int | None = None,
+    state: str = "open",
+) -> list[dict[str, Any]]:
+    """Open issues in org matching label filters (no assignee requirement)."""
+    org_name = github_org(org=org)
+    max_items = int(os.getenv("GITHUB_ORG_ISSUE_LIMIT", "100"))
+    if limit is not None:
+        max_items = limit
+    state_q = "open" if state.lower() == "open" else state
+
+    q = f"org:{org_name}+is:{state_q}"
+    for lb in include_labels or []:
+        q += f"+label:{lb}"
+    for lb in exclude_labels or []:
+        q += f"+-label:{lb}"
+
+    if issue_number is not None:
+        matches = [i for i in _search_issues(q, limit=max_items) if i["number"] == issue_number]
+        if not matches:
+            raise ValueError(
+                f"Issue #{issue_number} not found for query {q!r} in {org_name}"
+            )
+        if repo:
+            matches = [m for m in matches if issue_repo(m) == repo]
+            if not matches:
+                raise ValueError(f"Issue #{issue_number} not found in {repo}")
+        elif len(matches) > 1:
+            repos = ", ".join(issue_repo(m) for m in matches)
+            raise ValueError(
+                f"Issue #{issue_number} is ambiguous across repos: {repos}. Pass --repo"
+            )
+        return matches[:1]
+
+    return _search_issues(q, limit=max_items)
+
+
+def fetch_org_labeled_issues(
+    *,
+    org: str | None = None,
+    include_labels: list[str] | None = None,
+    exclude_labels: list[str] | None = None,
+    issue_number: int | None = None,
+    repo: str | None = None,
+    limit: int | None = None,
+    state: str = "open",
+) -> list[dict[str, Any]]:
+    """Open issues in org matching label filters (no assignee requirement)."""
+    org_name = github_org(org=org)
+    max_items = int(os.getenv("GITHUB_ORG_ISSUE_LIMIT", "100"))
+    if limit is not None:
+        max_items = limit
+    state_q = "open" if state.lower() == "open" else state
+
+    q = f"org:{org_name}+is:{state_q}"
+    for lb in include_labels or []:
+        q += f"+label:{lb}"
+    for lb in exclude_labels or []:
+        q += f"+-label:{lb}"
+
+    if issue_number is not None:
+        matches = [i for i in _search_issues(q, limit=max_items) if i["number"] == issue_number]
+        if not matches:
+            raise ValueError(
+                f"Issue #{issue_number} not found for query {q!r} in {org_name}"
+            )
+        if repo:
+            matches = [m for m in matches if issue_repo(m) == repo]
+            if not matches:
+                raise ValueError(f"Issue #{issue_number} not found in {repo}")
+        elif len(matches) > 1:
+            repos = ", ".join(issue_repo(m) for m in matches)
+            raise ValueError(
+                f"Issue #{issue_number} is ambiguous across repos: {repos}. Pass --repo"
+            )
+        return matches[:1]
+
+    return _search_issues(q, limit=max_items)

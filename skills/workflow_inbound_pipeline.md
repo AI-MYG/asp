@@ -129,22 +129,30 @@ E Gate Review（delegate 到与 Pipeline D 不同的 Agent 平台，如 D=OpenCo
    └─ 打回 → 去 executed + 打 review-changes-requested + 「## Pipeline E Gate Review」comment + 飞书私信
               ↓
         D 下一轮读 Gate Review comment 注入 prompt，复用 open PR 修订 → 重新打 executed → E 再审
+              ↓
+        人合 dev → dev CI/CD 成功 → Pipeline F assign 提需人 + ready-for-acceptance
 ```
 
 执行脚本：`tools/feishu_inbound/issue_pr_reviewer.py`
 
-- **扫描队列**：复用 `pipeline_cd_scan`（org 扫描），筛 `executed` + open linked PR + 无 `review-dev-pass` 的 **surface execution issue**（不扫 central issue）。
-- **Agent 互斥（非 OpenCode 换模型名）**：从 PR body `**Implemented by**: `opencode/glm-5.1`` 解析 Pipeline D 的 executor；E 经 rootgrove `tools.agent_clients` 委托到不同平台（默认 `cursor_sdk` / `composer-2.5`，配置见 `pipeline_e.review_route_pool`）。
-- **并发**：`--batch N --parallel`，按 `repo#issue` 粒度并行（无 worktree 争用），per-issue 锁用 `review-in-progress` 标签。launchd runner 默认 `--batch 3 --parallel`（`MAX_PARALLEL_REVIEWERS` 默认 3）。
-- **飞书私信**：业务语言（哪条需求、通过/打回、下一步谁做什么）。收件人 open_id 取 env `PIPELINE_E_FEISHU_OPEN_ID`（Keychain）> rootgrove `team_registry.yaml` 的 `marvin`；都没有则退回 `FEISHU_WEBHOOK_URL` 群消息。每条 issue 审完（通过/打回/异常）均通知。
-- **异常兜底**：模型输出无法解析为通过/打回时，**不改任何 label**，发私信 + 留 comment 待人工查看（安全默认：不放行也不打回）。
+## Pipeline F: Dev CI/CD 后验收指派
+
+E 通过且 PR 合入 base branch 后，等 dev CI/CD workflow 在 merge commit 上成功，再 assign 提需人。
+
+```
+review-dev-pass + PR merged + dev CI/CD success
+        ↓
+issue_dev_handback.py → handback_to_requester + ready-for-acceptance
+```
+
+执行脚本：`tools/feishu_inbound/issue_dev_handback.py`（launchd `:25/:55`）
 
 验证：
 
 ```bash
 source scripts/load_asp_env.sh
-python tools/feishu_inbound/issue_pr_reviewer.py --scan-only
-python tools/feishu_inbound/issue_pr_reviewer.py --issue <N> --repo AI-MYG/asp-backend --dry-run
+python tools/feishu_inbound/issue_dev_handback.py --scan-only
+python tools/feishu_inbound/issue_dev_handback.py --issue <N> --repo AI-MYG/asp-backend --dry-run
 ```
 
 ## 工具清单
@@ -159,5 +167,7 @@ python tools/feishu_inbound/issue_pr_reviewer.py --issue <N> --repo AI-MYG/asp-b
 | Smart PR | `tools/smart_pr.py` | Pipeline D PR 创建 |
 | Gate review 脚本 | `tools/feishu_inbound/issue_pr_reviewer.py` | Pipeline E |
 | Gate review runner | `scripts/run_issue_pr_reviewer.sh` | Pipeline E launchd |
+| Dev handback 脚本 | `tools/feishu_inbound/issue_dev_handback.py` | Pipeline F |
+| Dev handback runner | `scripts/run_issue_dev_handback.sh` | Pipeline F launchd |
 | 通知脚本 | `scripts/completion_notify.py` | Pipeline C 尾段（需求完成）/ E 复用其 Feishu 发送函数 |
 | OpenCode 客户端 | `tools/opencode_client.py` | Agent API 调用 |

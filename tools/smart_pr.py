@@ -53,15 +53,18 @@ def resolve_surface(surface_name: str, config: dict) -> dict[str, Any]:
 
 
 def handback_to_requester(
-    issue: int, issue_repo: str, pr_url: str, *, dry_run: bool = False
+    issue: int,
+    issue_repo: str,
+    pr_url: str,
+    *,
+    dry_run: bool = False,
+    stage: str = "f",
 ) -> dict[str, Any]:
     """Hand the issue back to the person who raised it.
 
-    After Pipeline D opens the PR, the issue's owner should be the original
-    requester (issue author) — not the executor/lead — so they can verify and,
-    once satisfied, close it. Sets the requester as the sole assignee. Bot
-    authors (e.g. the Stage-A pipeline / github-actions) are skipped because
-    there is no human to hand back to.
+    Intended after **Pipeline F** — PR merged to dev/base and dev CI/CD succeeded.
+    Sets the requester (issue author) as the sole assignee so they can verify
+    and close. Bot authors (e.g. Stage-A github-actions) are skipped.
     """
     result: dict[str, Any] = {"handback": "skipped", "requester": None}
     try:
@@ -97,11 +100,23 @@ def handback_to_requester(
         result["handback"] = "error"
         return result
 
-    comment = (
-        f"@{requester} Pipeline D 已实现并提交 PR：{pr_url or '(见上)'}\n\n"
-        f"已将该 issue 交回给你验收。确认满足需求后请手动关闭；"
-        f"如需修订，移除 `executed` 标签即可让 Pipeline D 下一轮重新处理。"
-    )
+    if stage.lower() == "d":
+        comment = (
+            f"@{requester} Pipeline D 已实现并提交 PR：{pr_url or '(见上)'}\n\n"
+            f"已将该 issue 交回给你验收。确认满足需求后请手动关闭；"
+            f"如需修订，移除 `executed` 标签即可让 Pipeline D 下一轮重新处理。"
+        )
+    elif stage.lower() == "f":
+        comment = (
+            f"@{requester} PR 已合入 dev 且 dev 环境 CI/CD 已成功：{pr_url or '(见上)'}\n\n"
+            f"请在此 issue 上验收。确认满足需求后请手动关闭；"
+            f"如需修订，移除 `executed` 标签即可让 Pipeline D 下一轮重新处理。"
+        )
+    else:
+        comment = (
+            f"@{requester} Pipeline E 已通过 dev 门审查：{pr_url or '(见上)'}\n\n"
+            f"等待合入 dev 并部署成功后才会指派验收；本 comment 为 legacy stage={stage!r}。"
+        )
     try:
         run(["gh", "issue", "comment", str(issue), "-R", issue_repo, "--body", comment],
             dry_run=dry_run)
@@ -123,9 +138,12 @@ def main() -> None:
     parser.add_argument("--issue-repo", default="AI-MYG/asp",
                         help="Repo to look up issue title (default: AI-MYG/asp)")
     parser.add_argument("--model", help="Model that implemented the change (shown in PR body)")
-    parser.add_argument("--handback-requester", action="store_true",
-                        help="After PR creation, reassign the issue to its requester "
-                             "(issue author) as sole assignee and notify them")
+    parser.add_argument(
+        "--handback-requester",
+        action="store_true",
+        help="(Legacy) Reassign issue to author after PR creation. Use Pipeline F "
+        "(issue_dev_handback.py) after dev CI/CD instead.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

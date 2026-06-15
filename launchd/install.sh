@@ -23,8 +23,9 @@ TRIAGE_LABEL="com.asp.feishu-inbound-triage"
 AGENT_LABEL="com.asp.feishu-inbound-agent"
 EXECUTOR_LABEL="com.asp.issue-executor"
 REVIEWER_LABEL="com.asp.issue-pr-reviewer"
+HANDBACK_LABEL="com.asp.issue-dev-handback"
 
-ALL_LABELS=("$OBSERVER_LABEL" "$REFLECTOR_LABEL" "$TRIAGE_LABEL" "$AGENT_LABEL" "$EXECUTOR_LABEL" "$REVIEWER_LABEL")
+ALL_LABELS=("$OBSERVER_LABEL" "$REFLECTOR_LABEL" "$TRIAGE_LABEL" "$AGENT_LABEL" "$EXECUTOR_LABEL" "$REVIEWER_LABEL" "$HANDBACK_LABEL")
 
 uninstall() {
   echo "Uninstalling ASP launchd jobs..."
@@ -54,6 +55,7 @@ TRIAGE_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml triage)
 AGENT_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml agent)
 EXECUTOR_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml executor)
 REVIEWER_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml reviewer)
+HANDBACK_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml handback)
 
 PATH_ENV='  <key>EnvironmentVariables</key>
   <dict>
@@ -222,6 +224,32 @@ $REVIEWER_SCHEDULE
   <string>$REPO_ROOT/logs/issue-pr-reviewer.log</string>
   <key>StandardErrorPath</key>
   <string>$REPO_ROOT/logs/issue-pr-reviewer.err</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO_ROOT</string>
+$PATH_ENV
+</dict>
+</plist>
+EOF
+
+# --- Pipeline F: Dev handback after CI/CD ---
+cat > "$LAUNCH_AGENTS/$HANDBACK_LABEL.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$HANDBACK_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$REPO_ROOT/scripts/run_issue_dev_handback.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+$HANDBACK_SCHEDULE
+  <key>StandardOutPath</key>
+  <string>$REPO_ROOT/logs/issue-dev-handback.log</string>
+  <key>StandardErrorPath</key>
+  <string>$REPO_ROOT/logs/issue-dev-handback.err</string>
   <key>WorkingDirectory</key>
   <string>$REPO_ROOT</string>
 $PATH_ENV
