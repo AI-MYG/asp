@@ -139,3 +139,4 @@ class（班级，course_level_id「基于第一个课程推导」，班主任 = 
 - **按班差异只在内容，不在排序 / 排期**：富文本等可有按班版本（`course_richtext`），但「第几天 / 先后 / 何时解锁」永远以 unit 维度 + 本班 `start_date` 为准。
 - 班主任「改课程内容」= 改 unit（业务侧），入口通常是 demo 班；不要把它理解成改某个交付班的私有数据。
 - 本文为 SSOT；各 surface repo 的领域模型小节只是指针，发现冲突以本文为准。
+- **媒体入库与 COS 数据流**（初始化 / 管理端上传 / 播放查询）：见 [tencent-cos-course-media-data-flow.md](./tencent-cos-course-media-data-flow.md)。
