@@ -202,7 +202,7 @@ def main() -> None:
 
     if args.handback_requester:
         output["handback"] = handback_to_requester(
-            args.issue, args.issue_repo, result, dry_run=args.dry_run
+            args.issue, args.issue_repo, result, dry_run=args.dry_run, stage="d"
         )
 
     print(json.dumps(output, ensure_ascii=False, indent=2))
