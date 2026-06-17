@@ -62,6 +62,8 @@ if ! "$REPO_ROOT/venv/bin/python" -c "import feishu_inbound" 2>/dev/null; then
       || "$REPO_ROOT/venv/bin/pip" install -q -e "$ENGINE_LOCAL"
   fi
 fi
+# opencode_job.py (Pipeline C/D analysis) needs dotenv in asp-infra venv
+"$REPO_ROOT/venv/bin/pip" install -q python-dotenv requests 2>/dev/null || true
 
 SCHEDULE_PY="$REPO_ROOT/launchd/schedule_config.py"
 VENV_PYTHON="$REPO_ROOT/venv/bin/python"

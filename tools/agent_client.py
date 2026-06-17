@@ -36,6 +36,20 @@ class AgentRunResult:
     raw_output: str = ""
 
 
+def _opencode_python() -> str:
+    """Python for opencode_job.py — must have python-dotenv (not the CLI venv)."""
+    override = os.environ.get("OPENCODE_PYTHON", "").strip()
+    if override:
+        return override
+    for candidate in (
+        _ASP_ROOT / "venv" / "bin" / "python",
+        _WORKSPACE_ROOT / "venv" / "bin" / "python",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return sys.executable
+
+
 def _extract_last_assistant_block(text: str) -> str:
     pattern = re.compile(
         r"--- assistant ---\n([\s\S]*?)(?=\n--- |\n========== end transcript ==========\n|\Z)"
@@ -56,7 +70,7 @@ def _run_opencode(
 ) -> tuple[Literal["success", "failed", "timeout"], str, str | None]:
     """Execute via opencode_job.py subprocess. Returns (status, output, error)."""
     cmd = [
-        sys.executable,
+        _opencode_python(),
         str(_WORKSPACE_ROOT / "tools" / "opencode_job.py"),
         prompt,
         "--title", "ASP-Agent",
