@@ -14,6 +14,9 @@ venv/
 logs/
 *.log
 
+# Feishu inbound runtime (checkpoints, engine logs, locks)
+var/
+
 # OS
 .DS_Store
 Thumbs.db

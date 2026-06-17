@@ -28,12 +28,14 @@ pipeline_cd_scan:
   # assignee: "369795172"   # 可选默认；本机以 Keychain GITHUB_ASSIGNEE 为准
 
 # --- Engine instance (A-light hybrid — feishu-inbound-skill SSOT) ---
+# Runtime artifacts (checkpoints + engine logs) live under instance var/, gitignored.
+# Paths are relative to this config file — not process cwd.
 secrets_prefix: ""
-state_dir: ../../state/feishu_inbound
+state_dir: ../../var/feishu_inbound/state
+logs_dir: ../../var/feishu_inbound/logs
 worktree_root: ../../../
 worktree_root_env: ASP_WORKTREE_ROOT
 worktree_dir: ../../worktrees
-logs_dir: ../../logs
 surfaces_config_path: ../../config/surfaces.yaml
 instance_tools_path: ../..
 
