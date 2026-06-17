@@ -14,11 +14,13 @@ _CONFIG = Path(__file__).resolve().parent.parent / "tools" / "feishu_inbound" / 
 _JOB_ALIASES = {
     "triage": "feishu_inbound_triage",
     "agent": "feishu_inbound_agent",
+    "lead_tick": "lead_tick",
     "executor": "issue_executor",
     "reviewer": "issue_pr_reviewer",
     "handback": "issue_dev_handback",
     "feishu_inbound_triage": "feishu_inbound_triage",
     "feishu_inbound_agent": "feishu_inbound_agent",
+    "lead_tick": "lead_tick",
     "issue_executor": "issue_executor",
     "issue_pr_reviewer": "issue_pr_reviewer",
     "issue_dev_handback": "issue_dev_handback",
@@ -82,9 +84,9 @@ def summary(job: str) -> str:
 def main() -> None:
     if len(sys.argv) < 3:
         print(
-            "Usage: schedule_config.py calendar-xml <triage|agent|executor|reviewer>\n"
-            "       schedule_config.py weekday-only <triage|agent|executor|reviewer>\n"
-            "       schedule_config.py summary <triage|agent|executor|reviewer>",
+            "Usage: schedule_config.py calendar-xml <triage|agent|lead_tick|executor|reviewer|handback>\n"
+            "       schedule_config.py weekday-only <triage|agent|lead_tick|executor|reviewer|handback>\n"
+            "       schedule_config.py summary <triage|agent|lead_tick|executor|reviewer|handback>",
             file=sys.stderr,
         )
         sys.exit(2)

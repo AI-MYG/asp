@@ -27,10 +27,71 @@ pipeline_cd_scan:
   exclude_repos: []
   # assignee: "369795172"   # 可选默认；本机以 Keychain GITHUB_ASSIGNEE 为准
 
-# --- Pipeline B/C/D: launchd 调度（SSOT，改此处后 bash launchd/install.sh）---
+# --- Engine instance (A-light hybrid — feishu-inbound-skill SSOT) ---
+secrets_prefix: ""
+state_dir: ../../state/feishu_inbound
+worktree_root: ../../../
+worktree_root_env: ASP_WORKTREE_ROOT
+worktree_dir: ../../worktrees
+logs_dir: ../../logs
+surfaces_config_path: ../../config/surfaces.yaml
+instance_tools_path: ../..
+
+env_loader:
+  import_chain: []
+
+prompts:
+  domain_context: |
+    ASP 飞书入站流水线。分析/执行前阅读对应 surface worktree 与 AGENTS.md。
+
+assignees:
+  by_id:
+    "369795172": "袁牧"
+    "1401554949": "胡剑飞"
+  by_name:
+    "袁牧": "369795172"
+    "胡剑飞": "1401554949"
+
+central_issue:
+  title_tag: '\[ASP-(\d+)\]'
+  body_ref: 'AI-MYG/asp#(\d+)'
+
+launchd_label_prefix: com.asp
+launchd_labels:
+  feishu_inbound_triage: com.asp.feishu-inbound-triage
+  feishu_inbound_agent: com.asp.feishu-inbound-agent
+  lead_tick: com.asp.feishu-inbound-lead-tick
+  issue_executor: com.asp.issue-executor
+  issue_pr_reviewer: com.asp.issue-pr-reviewer
+  issue_dev_handback: com.asp.issue-dev-handback
+
+advisor:
+  enabled: false
+  model: claude-opus-4-6
+  import_chain:
+    - tools.agent_clients.AgentClient
+
+agent_client:
+  import_chain:
+    - tools.agent_client.AgentClient
+
+surface_worktrees:
+  backend: projects/asp/backend
+  app: projects/asp/app
+  admin: projects/asp/admin
+  wecom: projects/asp/wecom
+  websites: projects/asp/websites
+  canonical: projects/asp/canonical
+
+# --- Pipeline B/C/D: launchd 调度（SSOT，改此处后 bash launchd/install.sh 或 feishu-inbound install-launchd）---
 # hours: all = 0–23 点每天；或 "9-18" 仅工作时间
 # weekday_only: false = 含周末（24/7 与 rootgrove calendar_interval_xml 一致）
+# lead_tick merges C+D+E (+ optional F sweeper) — prefer on lead Mac over separate agent/executor/reviewer
 launchd_schedules:
+  lead_tick:
+    hours: all
+    minutes: [20, 50]
+    weekday_only: false
   feishu_inbound_triage:
     hours: all
     minutes: [10, 40]
