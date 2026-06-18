@@ -135,10 +135,17 @@ pipeline_f:
 # --- Pipeline E: gate review (review only, never edits code / merges) ---
 # PR body records D via "**Implemented by**: `opencode/glm-5.1`" → E uses cursor_sdk/composer-2.5.
 # Overrides: PIPELINE_E_REVIEW_EXECUTOR, PIPELINE_E_REVIEW_MODEL (env) > fields below.
-# Feishu DM: PIPELINE_E_FEISHU_OPEN_ID (Keychain) > team_registry marvin > FEISHU_WEBHOOK_URL.
+# Feishu notify: open_id SSOT in feishu_notify below (app-scoped, not secret).
+#   app_id/secret stay in Keychain (TTS_BROADCAST_* or IC_FEISHU_* per bot).
+#   Env PIPELINE_E_FEISHU_OPEN_ID / PIPELINE_E_FEISHU_BOT can override config.
 pipeline_e:
   review_executor: cursor_agent
   review_model: composer-2.5
+  feishu_notify:
+    bot: tts
+    open_ids:
+      tts: ou_6d0ef3a7cfa50efecff07794ce084aee
+      ic: ou_40ce8162e8c5bd2d95d6570886eb6a65
   review_route_pool:
     - executor: cursor_agent
       model: composer-2.5
