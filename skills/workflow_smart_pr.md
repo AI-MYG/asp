@@ -33,3 +33,4 @@ python tools/smart_pr.py --issue <N> --surface <surface> --dry-run
 - `config/surfaces.yaml` 是分支/reviewer 路由的 SSOT
 - 跨 surface PR（涉及多个 repo）需分别提交，每个 surface 单独 PR
 - PR title 格式：`[ASP-<central_issue_N>] <description>`，方便关联追踪
+- **Pipeline D** 调用本脚本时**不**传 `--handback-requester`；提需人验收指派在 **Pipeline F**（见 `workflow_dev_handback.md`）

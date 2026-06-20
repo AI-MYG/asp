@@ -61,11 +61,7 @@ central_issue:
 launchd_label_prefix: com.asp
 launchd_labels:
   feishu_inbound_triage: com.asp.feishu-inbound-triage
-  feishu_inbound_agent: com.asp.feishu-inbound-agent
   lead_tick: com.asp.feishu-inbound-lead-tick
-  issue_executor: com.asp.issue-executor
-  issue_pr_reviewer: com.asp.issue-pr-reviewer
-  issue_dev_handback: com.asp.issue-dev-handback
 
 advisor:
   enabled: false
@@ -85,10 +81,10 @@ surface_worktrees:
   websites: projects/asp/websites
   canonical: projects/asp/canonical
 
-# --- Pipeline B/C/D: launchd 调度（SSOT，改此处后 bash launchd/install.sh 或 feishu-inbound install-launchd）---
+# --- Pipeline launchd 调度（SSOT，改此处后 bash launchd/install.sh 或 feishu-inbound install-launchd）---
 # hours: all = 0–23 点每天；或 "9-18" 仅工作时间
 # weekday_only: false = 含周末（24/7 与 rootgrove calendar_interval_xml 一致）
-# lead_tick merges C+D+E (+ optional F sweeper) — prefer on lead Mac over separate agent/executor/reviewer
+# Lead Mac: triage (B) + lead_tick (C→D→E→F chain). Legacy per-stage launchd jobs removed 2026-06-19.
 launchd_schedules:
   lead_tick:
     hours: all
@@ -98,28 +94,10 @@ launchd_schedules:
     hours: all
     minutes: [10, 40]
     weekday_only: false
-  feishu_inbound_agent:
-    hours: all
-    minutes: [20, 50]
-    weekday_only: false
-  issue_executor:
-    hours: all
-    minutes: [5, 35]
-    weekday_only: false
-  # Pipeline E — gate review, runs after executor (:05/:35) so PRs exist first.
-  issue_pr_reviewer:
-    hours: all
-    minutes: [15, 45]
-    weekday_only: false
-  # Pipeline F — handback after dev CI/CD (after human merges post-E)
-  issue_dev_handback:
-    hours: all
-    minutes: [25, 55]
-    weekday_only: false
 
 # --- Pipeline F: handback after dev CI/CD succeeds ---
 # Scans review-dev-pass issues; when linked PR is merged and dev workflow succeeds,
-# assigns issue author + ready-for-acceptance label.
+# assigns issue author via handback_to_requester (no label; idempotent on assignee).
 pipeline_f:
   scan:
     org: AI-MYG
@@ -158,7 +136,7 @@ pipeline_e:
   max_parallel: 3
 
 central_triage:
-  host_note: "Marvin MacBook — director machine (B :10/:40 + local C :20/:50)"
+  host_note: "Marvin MacBook — director machine (B :10/:40); lead tick C→F :20/:50"
   launchd_label: com.asp.feishu-inbound-triage
 
 # --- GitHub Target ---

@@ -8,20 +8,17 @@
 
 ## Overview
 
-三段解耦架构：
+飞书需求从入站到**提需人验收**的自动化闭环（A→F）：
 
 ```
-Pipeline A (Cloud)     Pipeline B (Central Mac)     Pipeline C (Per-developer)
-─────────────────     ─────────────────────────     ──────────────────────────
-Bitable 自动化         综合 Agent 分诊               Team Lead 本地 Agent
-     ↓                      ↓                              ↓
-GitHub Issue            Surface 路由                   Deep Analysis
-(AI-MYG/asp)           + 执行 Issue                   + Smart PR
-                       + Assignee                      + Review
-                                                       + Deploy
-                                                          ↓
-                                                    飞书通知需求方
+A 入站 → B 分诊 → C 分析 → D 执行+PR → E Gate Review
+    → 人合 dev → dev CI/CD → F sole assign 提需人 + 验收 comment
 ```
+
+给人读的详细说明见本文件各 Pipeline 节；E/F 亦可单独查阅：
+
+- [Gate Review（E）](./workflow_gate_review.md)
+- [Dev Handback（F）](./workflow_dev_handback.md)
 
 ## Pipeline A: Bitable → Central Issue
 
@@ -74,9 +71,9 @@ pipeline_cd_scan:
 | Job | 配置键 | 默认 |
 |-----|--------|------|
 | Pipeline B | `feishu_inbound_triage` | 每天 0–23 点 `:10` / `:40`，含周末 |
-| Pipeline C | `feishu_inbound_agent` | 每天 `:20` / `:50` |
-| Pipeline D | `issue_executor` | 每天 `:05` / `:35` |
-| Pipeline E | `issue_pr_reviewer` | 每天 `:15` / `:45`（在 D 之后） |
+| **Lead tick（C→F）** | `lead_tick` | 每天 `:20` / `:50` |
+
+C/D/E/F **不再**安装独立 launchd job（2026-06-19 退役）。链式执行由 `lead-tick` / `run_personal_lead_tick.sh` 一次跑完；各段仍可手动 CLI 单跑。
 
 ```yaml
 launchd_schedules:
@@ -130,7 +127,7 @@ E Gate Review（delegate 到与 Pipeline D 不同的 Agent 平台，如 D=OpenCo
               ↓
         D 下一轮读 Gate Review comment 注入 prompt，复用 open PR 修订 → 重新打 executed → E 再审
               ↓
-        人合 dev → dev CI/CD 成功 → Pipeline F assign 提需人 + ready-for-acceptance
+        人合 dev → dev CI/CD 成功 → Pipeline F sole assign 提需人 + 验收 comment
 ```
 
 执行脚本：`tools/feishu_inbound/issue_pr_reviewer.py`
@@ -142,10 +139,10 @@ E 通过且 PR 合入 base branch 后，等 dev CI/CD workflow 在 merge commit 
 ```
 review-dev-pass + PR merged + dev CI/CD success
         ↓
-issue_dev_handback.py → handback_to_requester + ready-for-acceptance
+issue_dev_handback.py → handback_to_requester（sole assignee 提需人 + 验收 comment）
 ```
 
-执行脚本：`tools/feishu_inbound/issue_dev_handback.py`（launchd `:25/:55`）
+执行脚本：`tools/feishu_inbound/issue_dev_handback.py`（Lead tick 链内 `:20/:50`）
 
 验证：
 
@@ -168,6 +165,6 @@ python tools/feishu_inbound/issue_dev_handback.py --issue <N> --repo AI-MYG/asp-
 | Gate review 脚本 | `tools/feishu_inbound/issue_pr_reviewer.py` | Pipeline E |
 | Gate review runner | `scripts/run_issue_pr_reviewer.sh` | Pipeline E launchd |
 | Dev handback 脚本 | `tools/feishu_inbound/issue_dev_handback.py` | Pipeline F |
-| Dev handback runner | `scripts/run_issue_dev_handback.sh` | Pipeline F launchd |
+| Lead tick runner | `scripts/run_lead_tick.sh`（或 launchd `com.asp.feishu-inbound-lead-tick`） | C→F 链式 |
 | 通知脚本 | `scripts/completion_notify.py` | Pipeline C 尾段（需求完成）/ E 复用其 Feishu 发送函数 |
 | OpenCode 客户端 | `tools/opencode_client.py` | Agent API 调用 |
