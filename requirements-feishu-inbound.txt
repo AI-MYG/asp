@@ -1,4 +1,4 @@
-feishu-inbound @ git+https://github.com/369795172/feishu-inbound-skill.git@v0.1.10
+feishu-inbound @ git+https://github.com/369795172/feishu-inbound-skill.git@v0.1.9
 python-dotenv>=1.0
 requests>=2.28
 # Local dev fallback (when tag not pushed yet):
