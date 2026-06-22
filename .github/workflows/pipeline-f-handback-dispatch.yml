@@ -19,7 +19,7 @@ jobs:
 
       - name: Install feishu-inbound engine
         run: |
-          pip install "feishu-inbound @ git+https://github.com/369795172/feishu-inbound-skill.git@v0.1.11"
+          pip install "feishu-inbound @ git+https://github.com/369795172/feishu-inbound-skill.git@v0.1.14"
 
       - name: Run Pipeline F from CI/CD
         env:
