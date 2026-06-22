@@ -84,7 +84,7 @@ surface_worktrees:
 # --- Pipeline launchd 调度（SSOT，改此处后 bash launchd/install.sh 或 feishu-inbound install-launchd）---
 # hours: all = 0–23 点每天；或 "9-18" 仅工作时间
 # weekday_only: false = 含周末（24/7 与 rootgrove calendar_interval_xml 一致）
-# Lead Mac: triage (B) + lead_tick (C→D→E→F chain). Legacy per-stage launchd jobs removed 2026-06-19.
+# Lead Mac: triage (B) + lead_tick (C→D→E→D'→E'→F chain). Legacy per-stage launchd jobs removed 2026-06-19.
 launchd_schedules:
   lead_tick:
     hours: all
@@ -94,6 +94,9 @@ launchd_schedules:
     hours: all
     minutes: [10, 40]
     weekday_only: false
+
+lead_tick:
+  revision_execute_after_review: true
 
 # --- Pipeline F: handback after dev/prod CI/CD + Feishu notify ---
 # Scans review-dev-pass issues; when linked PR is merged and CI workflow succeeds,
@@ -162,7 +165,7 @@ pipeline_e:
   max_parallel: 3
 
 central_triage:
-  host_note: "Marvin MacBook — director machine (B :10/:40); lead tick C→F :20/:50"
+  host_note: "Marvin MacBook — director machine (B :10/:40); lead tick C→D→E→D'→E'→F :20/:50"
   launchd_label: com.asp.feishu-inbound-triage
 
 # --- GitHub Target ---
