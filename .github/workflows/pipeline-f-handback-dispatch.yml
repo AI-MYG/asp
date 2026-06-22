@@ -1,5 +1,5 @@
 # Pipeline F scheme 3: receive deploy completion dispatch and run handback + Feishu notify.
-# Engine template: feishu-inbound-skill/templates/github-workflow-pipeline-f-handback-dispatch.yml
+# Instance: AI-MYG/asp (local path projects/asp-infra)
 
 name: Pipeline F Handback Dispatch
 
@@ -24,12 +24,19 @@ jobs:
       - name: Run Pipeline F from CI/CD
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PIPELINE_F_FEISHU_APP_ID: ${{ secrets.PIPELINE_F_FEISHU_APP_ID }}
-          PIPELINE_F_FEISHU_APP_SECRET: ${{ secrets.PIPELINE_F_FEISHU_APP_SECRET }}
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          TTS_BROADCAST_FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          TTS_BROADCAST_FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           REPO: ${{ github.event.client_payload.repo }}
           HEAD_SHA: ${{ github.event.client_payload.head_sha }}
-          CICD_STAGE: ${{ github.event.client_payload.cicd_stage }}
+          CICD_STAGE: ${{ github.event.client_payload.cicd_stage || github.event.client_payload.stage }}
         run: |
+          set -euo pipefail
+          if [ -z "${REPO:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
+            echo "::error::Missing repo or head_sha in dispatch payload"
+            exit 1
+          fi
           ISSUE=$(python - <<'PY'
           import re, os, subprocess, json
           repo = os.environ["REPO"]
@@ -38,7 +45,7 @@ jobs:
           pulls = json.loads(raw or "[]")
           for pr in pulls:
               ref = (pr.get("head") or {}).get("ref") or ""
-              m = re.match(r"issue-(\d+)", ref)
+              m = re.match(r"issue-(\d+)(?:/|$)", ref)
               if m:
                   print(m.group(1))
                   break
@@ -54,4 +61,4 @@ jobs:
             --repo "$REPO" \
             --issue "$ISSUE" \
             --head-sha "$HEAD_SHA" \
-            --cicd-stage "$CICD_STAGE"
+            --cicd-stage "${CICD_STAGE:-dev}"
