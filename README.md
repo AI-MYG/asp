@@ -21,23 +21,25 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
               ↓         ↓         ↓
          Team Lead 本地 Agent 分析 + Smart PR
                          ↓
-              Review → Merge → Deploy
+         Review → Merge to dev → Dev CI/CD → Promote PR → Merge to prod → Deploy
                          ↓
-              Pipeline C: 飞书通知需求方
+              Pipeline C: 飞书通知需求方（可选 completion_notify）
 ```
 
 中央 repo 的 issue 是"需求视角"（1 个需求），各 surface repo 的 issue 是"执行视角"（1:N 拆分）。
 
+**CI/CD 与用户可感知节点（飞书 Dev/PRD 卡片、Pipeline F 等）**: [docs/cicd_pipeline.md](docs/cicd_pipeline.md)
+
 ## Surface Repos
 
-| Surface | Repo | Base Branch | Team Lead |
-|---------|------|-------------|-----------|
-| backend | [AI-MYG/asp-backend](https://github.com/AI-MYG/asp-backend) | `dev` | Marvin |
-| app | [AI-MYG/asp-app](https://github.com/AI-MYG/asp-app) | `main` | 胡剑飞 |
-| admin | [AI-MYG/asp-admin](https://github.com/AI-MYG/asp-admin) | `main` | 胡剑飞 |
-| wecom | [AI-MYG/asp-wecom](https://github.com/AI-MYG/asp-wecom) | `main` | Marvin |
-| websites | [AI-MYG/asp-websites](https://github.com/AI-MYG/asp-websites) | `main` | Marvin |
-| canonical | [AI-MYG/asp-canonical](https://github.com/AI-MYG/asp-canonical) | `main` | Marvin |
+| Surface | Repo | Integration | Production | Team Lead |
+|---------|------|-------------|------------|-----------|
+| backend | [AI-MYG/asp-backend](https://github.com/AI-MYG/asp-backend) | `dev` | `production` | Marvin |
+| app | [AI-MYG/asp-app](https://github.com/AI-MYG/asp-app) | `dev` | `main` | 胡剑飞 |
+| admin | [AI-MYG/asp-admin](https://github.com/AI-MYG/asp-admin) | `dev` | `main` | 胡剑飞 |
+| wecom | [AI-MYG/asp-wecom](https://github.com/AI-MYG/asp-wecom) | `dev` | `main` | Marvin |
+| websites | [AI-MYG/asp-websites](https://github.com/AI-MYG/asp-websites) | `dev` | `main` | Marvin |
+| canonical | [AI-MYG/asp-canonical](https://github.com/AI-MYG/asp-canonical) | `dev` | `main` | Marvin |
 
 ## 目录结构
 
@@ -50,7 +52,8 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
 ├── personas/              # 团队成员人格（公理子集 + 决策偏好）
 ├── memory/                # L1/L2 项目记忆（Observer 写入，Reflector 蒸馏）
 ├── scripts/               # 自动化脚本（分诊、通知、Observer/Reflector）
-├── docs/                  # 架构文档、ADR、OpenCode 配置指南
+├── docs/                  # 架构文档、ADR、CI/CD、OpenCode 配置指南
+│   └── cicd_pipeline.md   # Dev/Prod 部署与飞书可感知节点 SSOT
 └── launchd/               # macOS 定时任务模板
 ```
 
