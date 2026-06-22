@@ -1,0 +1,49 @@
+# Pipeline F scheme 3 — receive deploy completion dispatch and run handback + Feishu notify.
+# Engine template: feishu-inbound-skill/templates/github-workflow-pipeline-f-handback-dispatch.yml
+
+name: Pipeline F Handback Dispatch
+
+on:
+  repository_dispatch:
+    types: [feishu-inbound-handback]
+
+jobs:
+  handback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install feishu-inbound engine
+        run: |
+          pip install "feishu-inbound @ git+https://github.com/369795172/feishu-inbound-skill.git@v0.1.9"
+
+      - name: Run Pipeline F from CI/CD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TTS_BROADCAST_FEISHU_APP_ID: ${{ secrets.TTS_BROADCAST_FEISHU_APP_ID }}
+          TTS_BROADCAST_FEISHU_APP_SECRET: ${{ secrets.TTS_BROADCAST_FEISHU_APP_SECRET }}
+          CHATOPS_WEBHOOK_URL: ${{ secrets.CHATOPS_WEBHOOK_URL }}
+          PIPELINE_F_FEISHU_OPEN_ID: ${{ secrets.PIPELINE_F_FEISHU_OPEN_ID }}
+          CONFIG_PATH: tools/feishu_inbound/config.yaml
+          CICD_REPO: ${{ github.event.client_payload.repo }}
+          HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+          CICD_STAGE: ${{ github.event.client_payload.stage }}
+          WORKFLOW_NAME: ${{ github.event.client_payload.workflow_name }}
+        run: |
+          set -e
+          if [ -z "$CICD_REPO" ] || [ -z "$HEAD_SHA" ]; then
+            echo "::error::Missing repo or head_sha in dispatch payload"
+            exit 1
+          fi
+          STAGE="${CICD_STAGE:-dev}"
+          feishu-inbound handback \
+            --config "$CONFIG_PATH" \
+            --from-cicd \
+            --repo "$CICD_REPO" \
+            --head-sha "$HEAD_SHA" \
+            --cicd-stage "$STAGE" \
+            ${WORKFLOW_NAME:+--workflow-name "$WORKFLOW_NAME"}

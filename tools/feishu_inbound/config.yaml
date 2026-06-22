@@ -95,23 +95,49 @@ launchd_schedules:
     minutes: [10, 40]
     weekday_only: false
 
-# --- Pipeline F: handback after dev CI/CD succeeds ---
-# Scans review-dev-pass issues; when linked PR is merged and dev workflow succeeds,
-# assigns issue author via handback_to_requester (no label; idempotent on assignee).
+# --- Pipeline F: handback after dev/prod CI/CD + Feishu notify ---
+# Scans review-dev-pass issues; when linked PR is merged and CI workflow succeeds,
+# assigns GitHub 负责人, posts F marker comment, and Feishu-DMs the GitHub issue owner.
+# Scheme 3: surface repos dispatch feishu-inbound-handback → asp-infra workflow (see templates/).
 pipeline_f:
   scan:
     org: AI-MYG
     limit: 100
+  feishu_notify:
+    bot: tts
+    webhook_env: CHATOPS_WEBHOOK_URL
+    open_ids:
+      tts: ou_6d0ef3a7cfa50efecff07794ce084aee
+    by_github_id:
+      "369795172": ou_6d0ef3a7cfa50efecff07794ce084aee
+      "1401554949": ou_40ce8162e8c5bd2d95d6570886eb6a65
+    requester_open_ids: {}
+  env_urls:
+    dev: "https://inputer-admin.aimyg.com"
+    prod: "https://admin.aimyg.com"
   dev_cicd:
     AI-MYG/asp-backend:
       workflow: "Backend Dev Test Container"
+      merge_base_branches: [dev]
     AI-MYG/asp-admin:
       workflow: "🔍 Code Quality - Vue Admin"
+      merge_base_branches: [main]
     AI-MYG/asp-app:
       workflow: "🚀 CI/CD Multi-Device Pipeline - Flutter Kiosk App"
+      merge_base_branches: [main]
+  prod_cicd:
+    AI-MYG/asp-backend:
+      workflow: "Backend Container Release"
+      merge_base_branches: [production]
+    AI-MYG/asp-admin:
+      workflow: "🚀 Manual Deploy"
+      merge_base_branches: [main]
+    AI-MYG/asp-app:
+      workflow: "🚀 Manual Deploy"
+      merge_base_branches: [main]
 
 # --- Pipeline E: gate review (review only, never edits code / merges) ---
-# PR body records D via "**Implemented by**: `opencode/glm-5.1`" → E uses cursor_sdk/composer-2.5.
+# PR body records D via "**Implemented by**: `opencode/glm-5.2`" → E uses cursor_sdk/composer-2.5.
 # Overrides: PIPELINE_E_REVIEW_EXECUTOR, PIPELINE_E_REVIEW_MODEL (env) > fields below.
 # Feishu notify: open_id SSOT in feishu_notify below (app-scoped, not secret).
 #   app_id/secret stay in Keychain (TTS_BROADCAST_* or IC_FEISHU_* per bot).
@@ -132,7 +158,7 @@ pipeline_e:
     - executor: claude_code
       model: claude-sonnet-4
     - executor: opencode
-      model: glm-5.1
+      model: glm-5.2
   max_parallel: 3
 
 central_triage:
