@@ -77,14 +77,8 @@ if [ ! -x "$REPO_ROOT/venv/bin/python" ]; then
   python3 -m venv "$REPO_ROOT/venv"
 fi
 if ! "$REPO_ROOT/venv/bin/python" -c "import feishu_inbound" 2>/dev/null; then
-  ENGINE_LOCAL="${ASP_WORKTREE_ROOT:-$HOME/CursorWorks/rootgrove}/projects/feishu-inbound-skill"
   echo "Installing feishu-inbound engine into asp-infra venv..."
-  if [ -f "$ENGINE_LOCAL/pyproject.toml" ]; then
-    "$REPO_ROOT/venv/bin/pip" install -q -e "$ENGINE_LOCAL"
-  elif [ -f "$REPO_ROOT/requirements-feishu-inbound.txt" ]; then
-    "$REPO_ROOT/venv/bin/pip" install -q -r "$REPO_ROOT/requirements-feishu-inbound.txt" \
-      || "$REPO_ROOT/venv/bin/pip" install -q -e "$ENGINE_LOCAL"
-  fi
+  bash "$REPO_ROOT/scripts/install_feishu_inbound_engine.sh"
 fi
 # opencode_job.py (Pipeline C/D analysis) needs dotenv in asp-infra venv
 "$REPO_ROOT/venv/bin/pip" install -q python-dotenv requests 2>/dev/null || true
