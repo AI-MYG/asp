@@ -103,6 +103,9 @@ lead_tick:
 # assigns GitHub 负责人, posts F marker comment, and Feishu-DMs the GitHub issue owner.
 # Scheme 3: surface repos dispatch feishu-inbound-handback → asp-infra workflow (see templates/).
 pipeline_f:
+  prod_eligibility_label: dev-accepted
+  promote:
+    dispatch_event: feishu-inbound-promote
   scan:
     org: AI-MYG
     limit: 100
