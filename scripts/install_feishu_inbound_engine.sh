@@ -62,9 +62,22 @@ fi
 
 TAG="v${VERSION}"
 WHEEL="feishu_inbound-${VERSION}-py3-none-any.whl"
-WHEEL_URL="https://x-access-token:${TOKEN}@github.com/${ENGINE_REPO}/releases/download/${TAG}/${WHEEL}"
 
 echo "Installing feishu-inbound==${VERSION} from GitHub Release ${TAG}..."
-"$VENV_PIP" install -q "$WHEEL_URL"
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+if command -v gh >/dev/null 2>&1; then
+  GH_TOKEN="$TOKEN" gh release download "$TAG" --repo "$ENGINE_REPO" --pattern "*.whl" -D "$TMPDIR"
+else
+  ASSET_ID="$(curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
+    "https://api.github.com/repos/${ENGINE_REPO}/releases/tags/${TAG}" \
+    | python3 -c "import json,sys; assets=json.load(sys.stdin)['assets']; print(next(a['id'] for a in assets if a['name']=='${WHEEL}'))")"
+  curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/octet-stream" \
+    "https://api.github.com/repos/${ENGINE_REPO}/releases/assets/${ASSET_ID}" \
+    -o "${TMPDIR}/${WHEEL}"
+fi
+
+"$VENV_PIP" install -q "${TMPDIR}"/*.whl
 
 "$REPO_ROOT/venv/bin/python" -c "import feishu_inbound; print('feishu-inbound', feishu_inbound.__version__)"
