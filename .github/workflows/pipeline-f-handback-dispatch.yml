@@ -35,7 +35,8 @@ jobs:
 
       - name: Run Pipeline F from CI/CD
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FEISHU_INBOUND_GH_TOKEN: ${{ secrets.FEISHU_INBOUND_GH_TOKEN }}
+          FEISHU_INBOUND_GH_PACKAGES_TOKEN: ${{ secrets.FEISHU_INBOUND_GH_PACKAGES_TOKEN }}
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           TTS_BROADCAST_FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
@@ -45,29 +46,32 @@ jobs:
           CICD_STAGE: ${{ github.event.client_payload.cicd_stage || github.event.client_payload.stage }}
         run: |
           set -euo pipefail
+          PY="$PWD/venv/bin/python"
+          if [ -n "${FEISHU_INBOUND_GH_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="$FEISHU_INBOUND_GH_TOKEN"
+          elif [ -n "${FEISHU_INBOUND_GH_PACKAGES_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="$FEISHU_INBOUND_GH_PACKAGES_TOKEN"
+          else
+            echo "::error::Missing FEISHU_INBOUND_GH_TOKEN for cross-repo GitHub API access"
+            exit 1
+          fi
+          export GH_TOKEN="$GITHUB_TOKEN"
           if [ -z "${REPO:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
             echo "::error::Missing repo or head_sha in dispatch payload"
             exit 1
           fi
-          ISSUE=$(python - <<'PY'
-          import re, os, subprocess, json
-          repo = os.environ["REPO"]
-          sha = os.environ["HEAD_SHA"]
-          raw = subprocess.check_output(["gh", "api", f"repos/{repo}/commits/{sha}/pulls"], text=True)
-          pulls = json.loads(raw or "[]")
-          for pr in pulls:
-              ref = (pr.get("head") or {}).get("ref") or ""
-              m = re.match(r"issue-(\d+)(?:/|$)", ref)
-              if m:
-                  print(m.group(1))
-                  break
+          ISSUE=$("$PY" - <<'PY'
+          import os
+          from feishu_inbound.handback.cicd import issues_for_head_sha
+          nums = issues_for_head_sha(os.environ["REPO"], os.environ["HEAD_SHA"])
+          print(nums[0] if nums else "")
           PY
           )
           if [ -z "${ISSUE:-}" ]; then
             echo "No issue number resolved from merge commit; skipping."
             exit 0
           fi
-          python -m feishu_inbound.cli handback \
+          "$PY" -m feishu_inbound.cli handback \
             --config tools/feishu_inbound/config.yaml \
             --from-cicd \
             --repo "$REPO" \
