@@ -1,4 +1,4 @@
-# Pin engine version only — install via GitHub Packages (see scripts/install_feishu_inbound_engine.sh).
+# Pin engine version only — install via GitHub Release wheel (see scripts/install_feishu_inbound_engine.sh).
 feishu-inbound==0.1.16
 python-dotenv>=1.0
 requests>=2.28

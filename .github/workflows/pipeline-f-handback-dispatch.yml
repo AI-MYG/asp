@@ -19,15 +19,19 @@ jobs:
 
       - name: Install feishu-inbound engine
         env:
-          GH_PKG_TOKEN: ${{ secrets.FEISHU_INBOUND_GH_PACKAGES_TOKEN }}
+          FEISHU_INBOUND_GH_TOKEN: ${{ secrets.FEISHU_INBOUND_GH_TOKEN }}
+          FEISHU_INBOUND_GH_PACKAGES_TOKEN: ${{ secrets.FEISHU_INBOUND_GH_PACKAGES_TOKEN }}
+          FEISHU_INBOUND_INSTALL: package
         run: |
-          if [ -z "${GH_PKG_TOKEN:-}" ]; then
-            echo "::error::Missing secret FEISHU_INBOUND_GH_PACKAGES_TOKEN (PAT with read:packages)"
+          if [ -z "${FEISHU_INBOUND_GH_TOKEN:-}" ]; then
+            FEISHU_INBOUND_GH_TOKEN="${FEISHU_INBOUND_GH_PACKAGES_TOKEN:-}"
+            export FEISHU_INBOUND_GH_TOKEN
+          fi
+          if [ -z "${FEISHU_INBOUND_GH_TOKEN:-}" ]; then
+            echo "::error::Missing secret FEISHU_INBOUND_GH_TOKEN (PAT with repo read on 369795172/feishu-inbound-skill)"
             exit 1
           fi
-          pip install feishu-inbound==0.1.16 \
-            --index-url https://pypi.org/simple \
-            --extra-index-url "https://__token__:${GH_PKG_TOKEN}@pypi.pkg.github.com/369795172/simple/"
+          bash scripts/install_feishu_inbound_engine.sh
 
       - name: Run Pipeline F from CI/CD
         env:

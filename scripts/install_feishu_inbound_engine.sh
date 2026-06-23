@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install feishu-inbound into asp-infra venv from GitHub Packages (version pin in requirements).
+# Install feishu-inbound into asp-infra venv from GitHub Release wheel (version pin in requirements).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_PIP="${VENV_PIP:-$REPO_ROOT/venv/bin/pip}"
 REQ_FILE="${REQ_FILE:-$REPO_ROOT/requirements-feishu-inbound.txt}"
 ENGINE_LOCAL="${ASP_WORKTREE_ROOT:-$HOME/CursorWorks/rootgrove}/projects/feishu-inbound-skill"
-GITHUB_PACKAGES_OWNER="${GITHUB_PACKAGES_OWNER:-369795172}"
+ENGINE_REPO="${FEISHU_INBOUND_REPO:-369795172/feishu-inbound-skill}"
 
 if [[ ! -x "$VENV_PIP" ]]; then
   echo "Creating asp-infra venv..."
@@ -21,6 +21,10 @@ if [[ -f "$ENGINE_LOCAL/pyproject.toml" && "${FEISHU_INBOUND_INSTALL:-}" != "pac
 fi
 
 _resolve_token() {
+  if [[ -n "${FEISHU_INBOUND_GH_TOKEN:-}" ]]; then
+    printf '%s' "$FEISHU_INBOUND_GH_TOKEN"
+    return
+  fi
   if [[ -n "${GITHUB_PACKAGES_TOKEN:-}" ]]; then
     printf '%s' "$GITHUB_PACKAGES_TOKEN"
     return
@@ -40,16 +44,27 @@ _resolve_token() {
   printf ''
 }
 
-TOKEN="$(_resolve_token)"
-if [[ -z "$TOKEN" ]]; then
-  echo "Error: need GITHUB_PACKAGES_TOKEN, GITHUB_TOKEN, or 'gh auth login' (read:packages)." >&2
+_version_from_req() {
+  grep -E '^feishu-inbound==' "$REQ_FILE" | head -1 | cut -d= -f3 | tr -d '[:space:]'
+}
+
+VERSION="$(_version_from_req)"
+if [[ -z "$VERSION" ]]; then
+  echo "Error: $REQ_FILE must pin feishu-inbound==X.Y.Z" >&2
   exit 1
 fi
 
-PKG_INDEX="https://__token__:${TOKEN}@pypi.pkg.github.com/${GITHUB_PACKAGES_OWNER}/simple/"
-echo "Installing feishu-inbound from GitHub Packages (${GITHUB_PACKAGES_OWNER})..."
-"$VENV_PIP" install -q -r "$REQ_FILE" \
-  --index-url https://pypi.org/simple \
-  --extra-index-url "$PKG_INDEX"
+TOKEN="$(_resolve_token)"
+if [[ -z "$TOKEN" ]]; then
+  echo "Error: need FEISHU_INBOUND_GH_TOKEN, GITHUB_TOKEN, or 'gh auth login' (repo read on ${ENGINE_REPO})." >&2
+  exit 1
+fi
+
+TAG="v${VERSION}"
+WHEEL="feishu_inbound-${VERSION}-py3-none-any.whl"
+WHEEL_URL="https://x-access-token:${TOKEN}@github.com/${ENGINE_REPO}/releases/download/${TAG}/${WHEEL}"
+
+echo "Installing feishu-inbound==${VERSION} from GitHub Release ${TAG}..."
+"$VENV_PIP" install -q "$WHEEL_URL"
 
 "$REPO_ROOT/venv/bin/python" -c "import feishu_inbound; print('feishu-inbound', feishu_inbound.__version__)"
