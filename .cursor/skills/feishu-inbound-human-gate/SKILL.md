@@ -15,6 +15,8 @@ Full skill: [skills/workflow_human_gate.md](../../../skills/workflow_human_gate.
 
 **Prefer** [feishu-inbound-acceptance](../feishu-inbound-acceptance/SKILL.md) for new issues (engine v0.1.17+).
 
+**环境**: [docs/onboarding_inbound_skills.md](../../../docs/onboarding_inbound_skills.md)（asp 仓库；不必 clone rootgrove）
+
 ## Quick path
 
 1. Confirm F handback: `review-dev-pass` + `## Pipeline F Dev Handback` + assignee = GitHub 负责人.

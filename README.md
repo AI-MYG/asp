@@ -53,7 +53,8 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
 ├── memory/                # L1/L2 项目记忆（Observer 写入，Reflector 蒸馏）
 ├── scripts/               # 自动化脚本（分诊、通知、Observer/Reflector）
 ├── docs/                  # 架构文档、ADR、CI/CD、OpenCode 配置指南
-│   └── cicd_pipeline.md   # Dev/Prod 部署与飞书可感知节点 SSOT
+│   ├── cicd_pipeline.md   # Dev/Prod 部署与飞书可感知节点 SSOT
+│   └── onboarding_inbound_skills.md  # 组员最小 CLI / Skill 环境（不必 clone rootgrove）
 └── launchd/               # macOS 定时任务模板
 ```
 
@@ -70,7 +71,17 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
 
 4. 本地 Agent 环境（OpenCode Server）：详见 [docs/setup_opencode.md](docs/setup_opencode.md)
 
-5. 安装 ASP 定时任务（与 rootgrove observer/reflector **并存**，时间错开且 rootgrove 更早）：
+### 组员：只用 Inbound Skill / 跑验收（不必 clone rootgrove）
+
+若你只在 surface repo（如 `asp-backend`）干活，但需要 **dev 验收**（`accept`）或 Cursor Skill：
+
+1. 浅 clone 或 sparse checkout 本仓库，见 **[docs/onboarding_inbound_skills.md](docs/onboarding_inbound_skills.md)**
+2. `bash scripts/bootstrap_inbound_cli.sh`（一次性）
+3. `bash scripts/run_accept.sh pass --issue N --repo AI-MYG/asp-backend`
+
+Cursor 请 **Open Folder → 本 asp 仓库根**，才会加载 `.cursor/skills/`。
+
+5. 安装 ASP 定时任务（lead / 总监机；验收组员可跳过）：
    ```bash
    bash launchd/disable_rootgrove_feishu_inbound.sh   # 仅关 rootgrove 飞书 B/C，保留 ASP
    bash launchd/install.sh
@@ -80,7 +91,7 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
    | Observer | 每日 08:00 | 每日 22:00 |
    | Reflector | 周日 09:00 | 周日 10:00 |
 
-5. Smart PR：
+6. Smart PR：
    ```bash
    python tools/smart_pr.py --issue 42 --surface backend
    ```

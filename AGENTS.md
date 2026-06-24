@@ -82,8 +82,9 @@ Observer 扫描范围：`AI-MYG/asp*` 所有 repo 的 issue/PR/commit 活动。
 ## Tools
 
 - Pipeline C/D 扫描范围：`tools/feishu_inbound/config.yaml` → `pipeline_cd_scan`（改配置即可，见 `skills/workflow_inbound_pipeline.md`）
-- Dev 验收：`./venv/bin/feishu-inbound accept pass|fail`（见 `skills/workflow_acceptance.md`、Cursor skill `feishu-inbound-acceptance`）
-- Skill 同步（维护者）：在 rootgrove 执行 `bash tools/feishu_inbound/sync_skills_to_asp_infra.sh`
+- **组员验收（不必 clone rootgrove）**：[`docs/onboarding_inbound_skills.md`](docs/onboarding_inbound_skills.md) → `bash scripts/bootstrap_inbound_cli.sh` → `bash scripts/run_accept.sh pass|fail ...`
+- Dev 验收 SSOT：`skills/workflow_acceptance.md`、Cursor skill `feishu-inbound-acceptance`
+- Skill 同步（维护者，在 rootgrove）：`bash tools/feishu_inbound/sync_skills_to_asp_infra.sh`
 - `tools/smart_pr.py`：读取 `config/surfaces.yaml`，自动创建 PR 并指派 reviewer
 - `tools/opencode_client.py`：OpenCode Server HTTP REST 客户端，供自动化脚本调用
 

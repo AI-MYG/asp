@@ -116,10 +116,13 @@ Reflector 从 L1 观察中蒸馏：架构趋势、流程改进点、团队协作
 
 ## 自包含设计
 
-本 repo 包含运行所有自动化所需的全部工具和配置，团队成员 clone 后配置 `.env` 即可独立运行：
+本 repo 包含运行所有自动化所需的全部工具和配置。组员若**只需验收 / Cursor Skill**、不必 clone rootgrove monorepo，见 [onboarding_inbound_skills.md](onboarding_inbound_skills.md)（浅 clone 或 sparse checkout 本仓库即可）。
 
 | 组件 | 位置 | 用途 |
 |------|------|------|
+| 组员验收引导 | `docs/onboarding_inbound_skills.md` | 最小 CLI + Skill 环境 |
+| 验收 CLI 引导 | `scripts/bootstrap_inbound_cli.sh` | 一次性安装 `feishu-inbound` |
+| 验收执行 | `scripts/run_accept.sh` | `accept pass\|fail` 封装 |
 | Surface 配置 | `config/surfaces.yaml` | repo/branch/reviewer SSOT |
 | 分诊配置 | `config/triage.yaml` | 关键词路由规则 |
 | Smart PR | `tools/smart_pr.py` | 自动创建 PR + reviewer 指派 |

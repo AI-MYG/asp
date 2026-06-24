@@ -7,4 +7,6 @@ description: Process feishu-inbound GitHub issues with evidence-based single-pla
 
 Reference spec: [skills/workflow_inbound_agent.md](../../../skills/workflow_inbound_agent.md)
 
+Pipeline lead 环境见 [docs/onboarding_inbound_skills.md](../../../docs/onboarding_inbound_skills.md)（验收组员只需 Acceptance skill + `run_accept.sh`）。
+
 Comment contract: verify in synced `projects/asp/` worktrees; one recommended solution only; Human reviews plan; Agent implements via `issue-{N}/{surface}` + `tools/smart_pr.py`. **Sync**: non-owned surfaces only (`GITHUB_ASSIGNEE`); owned surfaces allow local WIP. Product ambiguity → [workflow_asp_pr_review_feedback.md](../../../skills/workflow_asp_pr_review_feedback.md).
