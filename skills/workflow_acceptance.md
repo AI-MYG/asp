@@ -56,34 +56,19 @@ E AI pass → 负责人 merge dev → F dev handback
 
 ## CLI（ASP 团队）
 
-**组员环境**：不必 clone rootgrove；见 [docs/onboarding_inbound_skills.md](../docs/onboarding_inbound_skills.md)。一次性 `bash scripts/bootstrap_inbound_cli.sh`，日常：
+**组员环境**：见 [docs/onboarding_inbound_skills.md](../docs/onboarding_inbound_skills.md) · [全员指南](../docs/inbound_pipeline_team_guide.md)
 
 ```bash
 cd ~/CursorWorks/asp-infra   # 或你的 asp clone 路径
-
-# 验收通过（推荐）
-bash scripts/run_accept.sh pass --issue <N> --repo <owner/repo> [--note "飞书已确认"]
-
-# 验收不通过
-bash scripts/run_accept.sh fail --issue <N> --repo <owner/repo> --reason "<具体原因>"
+bash scripts/bootstrap_inbound_cli.sh    # 首次
+bash scripts/run_accept.sh pass --issue <N> --repo <owner/repo>
 ```
 
-底层等价于：
+**禁止**仅在 issue 手写 `## Dev Acceptance` 就结束；必须跑 CLI（或 lead 代跑 / lead tick 扫描）。
 
-```bash
-source scripts/load_asp_env.sh
-./venv/bin/feishu-inbound accept pass \
-  --config tools/feishu_inbound/config.yaml \
-  --issue <N> --repo <owner/repo>
-```
+底层等价：`./venv/bin/feishu-inbound accept pass --config tools/feishu_inbound/config.yaml ...`
 
-**禁止**仅在 issue 上发 `## Dev Acceptance` 评论就结束；必须由 CLI（或 lead 代跑）触发引擎。
-
-lead tick 轮询（总监机，通常自动）：
-
-```bash
-bash scripts/run_accept.sh scan
-```
+Personal / rootgrove instance：将 `config` 换为 `config/feishu_inbound_<instance>.yaml`，无 `run_accept.sh` 时用引擎 CLI 直接调用。
 
 ---
 

@@ -54,7 +54,8 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
 ├── scripts/               # 自动化脚本（分诊、通知、Observer/Reflector）
 ├── docs/                  # 架构文档、ADR、CI/CD、OpenCode 配置指南
 │   ├── cicd_pipeline.md   # Dev/Prod 部署与飞书可感知节点 SSOT
-│   └── onboarding_inbound_skills.md  # 组员最小 CLI / Skill 环境（不必 clone rootgrove）
+│   ├── onboarding_inbound_skills.md  # 环境 bootstrap（不必 clone rootgrove）
+│   └── inbound_pipeline_team_guide.md  # 全员角色 × Skill × 脚本
 └── launchd/               # macOS 定时任务模板
 ```
 
@@ -71,15 +72,13 @@ ASP (A Smart Pet) 儿童英语教育产品的中央项目大脑。
 
 4. 本地 Agent 环境（OpenCode Server）：详见 [docs/setup_opencode.md](docs/setup_opencode.md)
 
-### 组员：只用 Inbound Skill / 跑验收（不必 clone rootgrove）
+### 组员：飞书 Inbound 全流程参与
 
-若你只在 surface repo（如 `asp-backend`）干活，但需要 **dev 验收**（`accept`）或 Cursor Skill：
+1. 浅 clone 本仓库 → **[docs/onboarding_inbound_skills.md](docs/onboarding_inbound_skills.md)**（bootstrap CLI）
+2. 按角色参与各段 → **[docs/inbound_pipeline_team_guide.md](docs/inbound_pipeline_team_guide.md)**（Skill + 脚本对照表）
+3. Cursor：**Open Folder → asp 根目录**，加载全部 `.cursor/skills/feishu-inbound-*`
 
-1. 浅 clone 或 sparse checkout 本仓库，见 **[docs/onboarding_inbound_skills.md](docs/onboarding_inbound_skills.md)**
-2. `bash scripts/bootstrap_inbound_cli.sh`（一次性）
-3. `bash scripts/run_accept.sh pass --issue N --repo AI-MYG/asp-backend`
-
-Cursor 请 **Open Folder → 本 asp 仓库根**，才会加载 `.cursor/skills/`。
+Lead 额外需要 surface worktree + 可选 `bash launchd/install.sh`。
 
 5. 安装 ASP 定时任务（lead / 总监机；验收组员可跳过）：
    ```bash

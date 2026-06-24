@@ -1,8 +1,7 @@
-# 飞书 Inbound Skill — 组员最小环境（不必 clone 整个 monorepo）
+# 飞书 Inbound Skill — 组员环境（不必 clone 整个 monorepo）
 
-面向 **app/admin lead、验收人**：在 surface repo（如 `asp-backend`）里看到 F handback 后，需要跑 **Acceptance** 或（存量 issue）**Human Gate**。  
-你**不需要** clone Marvin 的 `rootgrove` monorepo；也**不必**拉全量 ASP 工作区（各 surface 代码树）。  
-只需要 **`AI-MYG/asp` 本仓库里的 CLI 薄层** + `gh` 登录。
+面向 **全体 ASP 组员**。按你在流水线中的角色参与各段 → **[全员参与指南](inbound_pipeline_team_guide.md)**。  
+本文说明如何 **获取 asp 仓库 + CLI**，无需 Marvin 的 `rootgrove` monorepo。
 
 ---
 
@@ -46,10 +45,9 @@ git sparse-checkout set \
   requirements-feishu-inbound.txt \
   .env.example \
   .cursor/skills \
-  skills/workflow_acceptance.md \
-  skills/workflow_human_gate.md \
-  skills/INDEX.md \
-  docs/onboarding_inbound_skills.md
+  skills \
+  docs/onboarding_inbound_skills.md \
+  docs/inbound_pipeline_team_guide.md
 git checkout main
 bash scripts/bootstrap_inbound_cli.sh
 ```
@@ -105,13 +103,21 @@ bash scripts/run_accept.sh fail --issue 148 --repo AI-MYG/asp-backend --reason "
 
 ## Cursor Skill 使用注意
 
-| Skill | 何时用 | 必须执行 |
-|-------|--------|----------|
-| `feishu-inbound-acceptance` | F 之后 dev 验收（**新 issue**） | 终端跑 `run_accept.sh`，不要只让 Agent 发 GitHub 评论 |
-| `feishu-inbound-human-gate` | 存量 issue、旧 F 评论仍写 `/gate pass` | `run_issue_pr_reviewer.sh` 或等 lead tick |
-| `feishu-inbound-agent` | Pipeline C 分析（lead 本机） | 需完整 launchd / worktree，见 [workflow_inbound_pipeline.md](../skills/workflow_inbound_pipeline.md) |
+完整表见 [inbound_pipeline_team_guide.md](inbound_pipeline_team_guide.md)。核心规则：
 
-对 Skill 说「issue #148 验收通过」时，应要求 Agent **在本机 asp 目录执行** `bash scripts/run_accept.sh pass ...`，而不是 `gh issue comment`。
+1. **Open Folder → asp 仓库根**（不是 surface repo）
+2. Agent **跑终端脚本**，不要只用 `gh issue comment` 代替引擎（尤其 D / E / Acceptance）
+3. 首次：`bash scripts/bootstrap_inbound_cli.sh`
+
+| Skill | 参与者 |
+|-------|--------|
+| `feishu-inbound-triage` | 总监机 |
+| `feishu-inbound-agent` | Assignee（C） |
+| `feishu-inbound-plan-approval` | 审方案（C→D） |
+| `feishu-inbound-executor` | Assignee（D） |
+| `feishu-inbound-gate-review` | Assignee（E AI） |
+| `feishu-inbound-acceptance` | 提需人 / 验收 |
+| `feishu-inbound-human-gate` | Legacy 存量 issue |
 
 ---
 
@@ -129,6 +135,7 @@ bash scripts/run_accept.sh fail --issue 148 --repo AI-MYG/asp-backend --reason "
 
 ## 相关
 
+- [**全员参与指南**](inbound_pipeline_team_guide.md)
 - [Dev Acceptance workflow](../skills/workflow_acceptance.md)
 - [Human Gate (Legacy)](../skills/workflow_human_gate.md)
 - [Inbound Pipeline 总览](../skills/workflow_inbound_pipeline.md)

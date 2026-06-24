@@ -7,7 +7,7 @@
 1. **需求级 Issue SSOT**：飞书入站需求在此创建 issue，综合 Agent 分诊后路由到各 surface repo
 2. **项目记忆**：Observer（日频）+ Reflector（周频）持续积累项目洞察
 3. **团队 Persona**：逐步为每个团队成员构建认知画像，提升分诊精准度
-4. **项目级 Skill**：ASP 专有的分诊、收尾、通知等执行流程（`skills/` + Cursor wrappers 在 `.cursor/skills/`）
+4. **项目级 Skill**：ASP 专有 workflow + Cursor wrappers（`skills/` + `.cursor/skills/feishu-inbound-*`）；全员指南 `docs/inbound_pipeline_team_guide.md`
 5. **自动化工具**：Smart PR、OpenCode 客户端等，团队成员 clone 即可使用
 
 ## 领域模型（必读）
@@ -82,8 +82,7 @@ Observer 扫描范围：`AI-MYG/asp*` 所有 repo 的 issue/PR/commit 活动。
 ## Tools
 
 - Pipeline C/D 扫描范围：`tools/feishu_inbound/config.yaml` → `pipeline_cd_scan`（改配置即可，见 `skills/workflow_inbound_pipeline.md`）
-- **组员验收（不必 clone rootgrove）**：[`docs/onboarding_inbound_skills.md`](docs/onboarding_inbound_skills.md) → `bash scripts/bootstrap_inbound_cli.sh` → `bash scripts/run_accept.sh pass|fail ...`
-- Dev 验收 SSOT：`skills/workflow_acceptance.md`、Cursor skill `feishu-inbound-acceptance`
+- **组员 Inbound 参与**：[`docs/inbound_pipeline_team_guide.md`](docs/inbound_pipeline_team_guide.md)（角色 × Skill × 脚本）；环境 [`docs/onboarding_inbound_skills.md`](docs/onboarding_inbound_skills.md)
 - Skill 同步（维护者，在 rootgrove）：`bash tools/feishu_inbound/sync_skills_to_asp_infra.sh`
 - `tools/smart_pr.py`：读取 `config/surfaces.yaml`，自动创建 PR 并指派 reviewer
 - `tools/opencode_client.py`：OpenCode Server HTTP REST 客户端，供自动化脚本调用

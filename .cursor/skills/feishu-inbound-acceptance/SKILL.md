@@ -12,21 +12,18 @@ disable-model-invocation: true
 
 Full skill: [skills/workflow_acceptance.md](../../../skills/workflow_acceptance.md)
 
-**组员环境（不必 clone rootgrove）**: [docs/onboarding_inbound_skills.md](../../../docs/onboarding_inbound_skills.md)
+**ASP 组员（不必 clone rootgrove）**: [docs/onboarding_inbound_skills.md](../../../docs/onboarding_inbound_skills.md) · [全员指南](../../../docs/inbound_pipeline_team_guide.md)
 
 ## 必须执行（不要只发 GitHub 评论）
 
-1. 确认 workspace 为 **asp 仓库根**（`AI-MYG/asp`），或已按 onboarding 做 sparse checkout。
-2. 首次：`bash scripts/bootstrap_inbound_cli.sh`
-3. 在终端执行（将 issue/repo 换成实际值）：
+ASP 仓库根目录：
 
 ```bash
+bash scripts/bootstrap_inbound_cli.sh   # 首次
 bash scripts/run_accept.sh pass --issue <N> --repo <owner/repo>
-# fail: bash scripts/run_accept.sh fail --issue <N> --repo <owner/repo> --reason "..."
 ```
 
-4. 验证 issue 出现 `dev-accepted` 与 `## Dev Acceptance — Recorded`。
-
-**禁止**：仅用 `gh issue comment` 贴 `## Dev Acceptance` 后结束；那不会可靠触发 promote PR。
+验证 `dev-accepted` + `## Dev Acceptance — Recorded`。
 
 Engine SSOT: `369795172/feishu-inbound-skill` → `docs/acceptance_gate.md`
+

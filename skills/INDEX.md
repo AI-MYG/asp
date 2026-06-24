@@ -2,41 +2,51 @@
 
 ASP 项目级 skill，专注于需求闭环（分诊 → 分析 → PR → 部署 → 验收）。
 
-## Workflow
+**全员参与**： [inbound_pipeline_team_guide.md](../docs/inbound_pipeline_team_guide.md) · 环境引导 [onboarding_inbound_skills.md](../docs/onboarding_inbound_skills.md)
 
-- [Triage Routing](./workflow_triage_routing.md) — 综合 Agent 分诊：中央 issue → surface 判定 + difficulty + assignee → 各 repo 创建执行 issue
-- [Inbound Pipeline](./workflow_inbound_pipeline.md) — 飞书入站全流程 A→F（给人读的 ASP 版）
-- [Inbound Pipeline（完整 SSOT 副本）](./workflow_inbound_pipeline_full.md) — rootgrove 同步的完整编排文档
-- [Inbound Agent（C）](./workflow_inbound_agent.md) — 深度分析 comment 契约
-- [Inbound Executor（D）](./workflow_inbound_executor.md) — 自动执行 + Smart PR
-- [Gate Review（E）](./workflow_gate_review.md) — AI 门禁 + 人测 gate 入口
-- [Gate Review（完整）](./workflow_gate_review_full.md)
-- [Human Gate（E 人测，Legacy）](./workflow_human_gate.md) — `/gate pass|fail`，存量 issue
-- [Dev Acceptance](./workflow_acceptance.md) — **新** dev 验收：`accept pass|fail` → `dev-accepted` + promote PR
-- [Dev Handback（F）](./workflow_dev_handback.md) — dev CI/CD 成功后验收指派
-- [Dev Handback（完整）](./workflow_dev_handback_full.md)
-- [Post Implement](./workflow_post_implement.md) — issue 完成收尾（PR 合入 + 飞书通知 + 中央 issue 关闭）
-- [Smart PR](./workflow_smart_pr.md) — Smart PR 在 ASP 多 repo 下的约定（`tools/smart_pr.py`）
+## Workflow（按流水线段）
+
+| 段 | 短指南 | 完整 SSOT | Cursor Skill |
+|----|--------|-----------|--------------|
+| B 分诊 | [Triage Routing](./workflow_triage_routing.md) | [inbound_triage](./workflow_inbound_triage.md) | `feishu-inbound-triage` |
+| C 分析 | [Agent](./workflow_agent.md) | [inbound_agent](./workflow_inbound_agent.md) | `feishu-inbound-agent` |
+| C→D 审方案 | [Plan Approval](./workflow_plan_approval.md) | [plan_approval_full](./workflow_plan_approval_full.md) | `feishu-inbound-plan-approval` |
+| D 执行 | [Executor](./workflow_executor.md) | [inbound_executor](./workflow_inbound_executor.md) | `feishu-inbound-executor` |
+| E 门禁 | [Gate Review](./workflow_gate_review.md) | [gate_review_full](./workflow_gate_review_full.md) | `feishu-inbound-gate-review` |
+| F handback | [Dev Handback](./workflow_dev_handback.md) | [dev_handback_full](./workflow_dev_handback_full.md) | — |
+| 验收 | [Dev Acceptance](./workflow_acceptance.md) | — | `feishu-inbound-acceptance` |
+| Legacy 人测 | [Human Gate](./workflow_human_gate.md) | — | `feishu-inbound-human-gate` |
+
+## 总览与其它
+
+- [Inbound Pipeline](./workflow_inbound_pipeline.md) — ASP 版 A→F 总览
+- [Inbound Pipeline（完整）](./workflow_inbound_pipeline_full.md)
+- [Post Implement](./workflow_post_implement.md)
+- [Smart PR](./workflow_smart_pr.md)
 
 ## Cursor Skills（`.cursor/skills/`）
 
-团队 **用 Cursor 打开本 asp 仓库根目录** 后自动发现（仅在 `asp-backend` 等 surface 仓库内不会出现这些 skill）。
+用 Cursor **打开 asp 仓库根目录** 后自动加载（在 `asp-backend` 等 surface 仓库内不会出现）。
 
-| Skill | 用途 |
-|-------|------|
-| `feishu-inbound-agent` | Pipeline C 分析 |
-| `feishu-inbound-human-gate` | E 人测 gate（Legacy） |
-| `feishu-inbound-acceptance` | F 之后 dev 验收 |
+| Skill | 参与者 |
+|-------|--------|
+| `feishu-inbound-triage` | 总监机 |
+| `feishu-inbound-agent` | Assignee / lead |
+| `feishu-inbound-plan-approval` | Reviewer / assignee |
+| `feishu-inbound-executor` | Assignee / lead |
+| `feishu-inbound-gate-review` | Assignee / lead |
+| `feishu-inbound-acceptance` | 提需人 / 验收人 |
+| `feishu-inbound-human-gate` | 负责人（存量 issue） |
 
-**不想 clone 整个 monorepo？** 见 [组员最小环境](../docs/onboarding_inbound_skills.md)（浅 clone / sparse checkout 本仓库即可）。
+一次性环境：`bash scripts/bootstrap_inbound_cli.sh`
 
-同步命令（维护者，在 rootgrove 执行）：`bash tools/feishu_inbound/sync_skills_to_asp_infra.sh`
+维护者同步（rootgrove）：`bash tools/feishu_inbound/sync_skills_to_asp_infra.sh`
 
 ## Contract
 
-- [Debug Analysis](./contract_debug_analysis.md) — ASP Debug 分析 comment 的输出格式契约
-- [Triage Comment](./contract_triage_comment.md) — 分诊 comment 的输出格式契约
+- [Debug Analysis](./contract_debug_analysis.md)
+- [Triage Comment](./contract_triage_comment.md)
 
 ## Reference
 
-- [Surface Conventions](./reference_surface_conventions.md) — 各 surface 构建/部署/分支约定汇总
+- [Surface Conventions](./reference_surface_conventions.md)
