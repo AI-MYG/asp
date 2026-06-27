@@ -98,6 +98,11 @@ launchd_schedules:
 lead_tick:
   revision_execute_after_review: true
 
+# Pipeline D auto-retry limits (engine v0.1.20+)
+pipeline_d:
+  max_attempts: 3
+  max_revision_rounds: 3
+
 # --- Pipeline F: handback after dev/prod CI/CD + Feishu notify ---
 # Scans review-dev-pass issues; when linked PR is merged and CI workflow succeeds,
 # assigns GitHub 负责人, posts F marker comment, and Feishu-DMs the GitHub issue owner.
