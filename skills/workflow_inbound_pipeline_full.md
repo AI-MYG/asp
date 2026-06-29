@@ -216,6 +216,16 @@ Handback 时机：人工合入 dev 且 dev CI/CD success 之后。不打 `ready-
 | `review-dev-pass` | E | F（扫描入口） | 完成标记 | Pipeline E dev 门通过，等待合入 dev |
 | `review-changes-requested` | E | D | Gate 反馈 | E 打回，D 下一轮按 comment 修订 |
 | `execution-failed` | D | Human | 告警 | 执行或 PR 失败 |
+| `execution-exhausted` | D | Human | 停机 | 自动重试达上限（`pipeline_d.max_attempts` / `max_revision_rounds`），需人工运行 |
+
+**Pipeline D 重试上限**（engine v0.1.20+，config `pipeline_d`）：
+
+| 配置项 | 默认 | 含义 |
+|--------|------|------|
+| `max_attempts` | 3 | 连续执行失败次数，超限加 `execution-exhausted` 并停止 lead tick 自动拾取 |
+| `max_revision_rounds` | 3 | E 打回（`## Pipeline E Gate Review`）轮次上限 |
+
+人工恢复：移除 `execution-exhausted` 后手动 `execute --issue N`；或加 `request-reanalysis` 从 C 重来。
 
 **关键设计**：B 的输出 label 对 C 是「有则用、无则降级」——C 不因缺少 `triaged` 而漏扫 issue。
 

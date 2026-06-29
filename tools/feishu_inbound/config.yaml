@@ -147,6 +147,10 @@ pipeline_f:
       workflow: "🚀 Manual Deploy"
       merge_base_branches: [main]
 
+# --- Acceptance: dev business gate after F dev handback ---
+acceptance:
+  release_owner: "369795172"
+
 # --- Pipeline E: gate review (review only, never edits code / merges) ---
 # PR body records D via "**Implemented by**: `opencode/glm-5.2`" → E uses cursor_sdk/composer-2.5.
 # Overrides: PIPELINE_E_REVIEW_EXECUTOR, PIPELINE_E_REVIEW_MODEL (env) > fields below.
