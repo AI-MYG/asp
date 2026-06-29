@@ -116,7 +116,7 @@ bash scripts/run_accept.sh fail --issue 148 --repo AI-MYG/asp-backend --reason "
 | `feishu-inbound-plan-approval` | 审方案（C→D） |
 | `feishu-inbound-executor` | Assignee（D） |
 | `feishu-inbound-gate-review` | Assignee（E AI） |
-| `feishu-inbound-acceptance` | 提需人 / 验收 |
+| `feishu-inbound-acceptance` | GitHub 负责人（dev 验收）；pass 后 assign release owner 做 prod |
 | `feishu-inbound-human-gate` | Legacy 存量 issue |
 
 ---
