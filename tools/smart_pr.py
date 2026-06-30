@@ -27,6 +27,96 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SURFACES_CONFIG = REPO_ROOT / "config" / "surfaces.yaml"
 
 
+def _git_lines(cmd: list[str], *, cwd: Path) -> list[str]:
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        return []
+    return [ln for ln in result.stdout.splitlines() if ln.strip()]
+
+
+def _resolve_surface_worktree(surface: dict[str, Any]) -> Path | None:
+    local_path = surface.get("local_path")
+    if not isinstance(local_path, str) or not local_path.strip():
+        return None
+    candidate = (REPO_ROOT.parent.parent / local_path).resolve()
+    return candidate if candidate.is_dir() else None
+
+
+def _backend_repo_root(cwd: Path, surface: dict[str, Any]) -> Path | None:
+    if (cwd / "backend" / "Makefile").is_file():
+        return cwd
+    if (cwd / "Makefile").is_file() and (cwd / "scripts" / "export_openapi.py").is_file():
+        return cwd.parent
+    return _resolve_surface_worktree(surface)
+
+
+def _commits_touch_backend_app(repo_root: Path, base_branch: str) -> bool:
+    for ref in (f"origin/{base_branch}...HEAD", f"origin/{base_branch}..HEAD"):
+        names = _git_lines(["git", "diff", "--name-only", ref], cwd=repo_root)
+        if names and any(n.startswith("backend/app/") for n in names):
+            return True
+    return False
+
+
+def ensure_openapi_synced(
+    repo_root: Path,
+    base_branch: str,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Export OpenAPI spec and verify before PR creation (backend surface)."""
+    backend_dir = repo_root / "backend"
+    if not (backend_dir / "Makefile").is_file():
+        raise RuntimeError(f"backend Makefile not found under {repo_root}")
+
+    run(["make", "openapi"], cwd=backend_dir, dry_run=dry_run)
+    if dry_run:
+        run(["make", "check-openapi"], cwd=backend_dir, dry_run=True)
+        return
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "docs/api/openapi.json"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if status.stdout.strip():
+        run(["git", "add", "docs/api/openapi.json"], cwd=repo_root, dry_run=False)
+        run(
+            ["git", "commit", "-m", "chore: regenerate openapi.json"],
+            cwd=repo_root,
+            dry_run=False,
+        )
+        branch = _git_lines(["git", "branch", "--show-current"], cwd=repo_root)
+        branch_name = branch[0] if branch else "HEAD"
+        run(["git", "push", "origin", branch_name], cwd=repo_root, dry_run=False)
+
+    run(["make", "check-openapi"], cwd=backend_dir, dry_run=False)
+
+
+def maybe_enforce_backend_openapi_gate(
+    surface_name: str,
+    surface: dict[str, Any],
+    base_branch: str,
+    branch_name: str,
+    *,
+    dry_run: bool = False,
+) -> None:
+    if surface_name != "backend":
+        return
+    repo_root = _backend_repo_root(Path.cwd(), surface)
+    if repo_root is None:
+        print("  Warning: backend worktree not found; skipping OpenAPI gate", file=sys.stderr)
+        return
+    run(["git", "fetch", "origin", base_branch, branch_name], cwd=repo_root, dry_run=dry_run)
+    if not _commits_touch_backend_app(repo_root, base_branch):
+        print("  OpenAPI gate: no backend/app changes; skipped", file=sys.stderr)
+        return
+    print(f"  OpenAPI gate: syncing spec in {repo_root}", file=sys.stderr)
+    ensure_openapi_synced(repo_root, base_branch, dry_run=dry_run)
+
+
 def load_surfaces() -> dict[str, Any]:
     with open(SURFACES_CONFIG, encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -106,6 +196,16 @@ def handback_to_requester(
             f"已将该 issue 交回给你验收。确认满足需求后请手动关闭；"
             f"如需修订，移除 `executed` 标签即可让 Pipeline D 下一轮重新处理。"
         )
+    elif stage.lower() == "prod":
+        # Prod marker comment is posted by feishu-inbound engine (Pipeline F Prod Handback).
+        result["handback"] = "reassigned"
+        result["removed_assignees"] = to_remove
+        print(
+            f"  Handback: issue {issue_repo}#{issue} reassigned to @{requester}"
+            + (f" (removed {to_remove})" if to_remove else ""),
+            file=sys.stderr,
+        )
+        return result
     elif stage.lower() == "f":
         comment = (
             f"@{requester} PR 已合入 dev 且 dev 环境 CI/CD 已成功：{pr_url or '(见上)'}\n\n"
@@ -161,6 +261,14 @@ def main() -> None:
     print(f"Base branch: {base_branch}")
     print(f"PR branch: {branch_name}")
     print(f"Reviewers: {reviewers}")
+
+    maybe_enforce_backend_openapi_gate(
+        args.surface,
+        surface,
+        base_branch,
+        branch_name,
+        dry_run=args.dry_run,
+    )
 
     # Get issue title for PR title
     pr_title = args.title
