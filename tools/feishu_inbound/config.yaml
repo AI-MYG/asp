@@ -98,7 +98,7 @@ launchd_schedules:
 lead_tick:
   revision_execute_after_review: true
 
-# Pipeline D auto-retry limits (engine v0.1.20+)
+# Pipeline D auto-retry limits (engine v0.1.20+); v0.1.26+ clears stale local counters when execution-exhausted removed
 pipeline_d:
   max_attempts: 3
   max_revision_rounds: 3

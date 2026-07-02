@@ -225,7 +225,9 @@ Handback 时机：人工合入 dev 且 dev CI/CD success 之后。不打 `ready-
 | `max_attempts` | 3 | 连续执行失败次数，超限加 `execution-exhausted` 并停止 lead tick 自动拾取 |
 | `max_revision_rounds` | 3 | E 打回（`## Pipeline E Gate Review`）轮次上限 |
 
-人工恢复：移除 `execution-exhausted` 后手动 `execute --issue N`；或加 `request-reanalysis` 从 C 重来。
+人工恢复：移除 `execution-exhausted` 后手动 `execute --issue N`（engine v0.1.26+ 自动清本地 stale `failure_count`，无需 `--force`）；或加 `request-reanalysis` 从 C 重来。
+
+本地 `issue_executor_state.json` 仅缓存未达上限的失败计数与成功元数据；**停机闸门以 GitHub `execution-exhausted` label 为准**，label 移除后 lead tick 会 reconcile 本地计数。
 
 **关键设计**：B 的输出 label 对 C 是「有则用、无则降级」——C 不因缺少 `triaged` 而漏扫 issue。
 
