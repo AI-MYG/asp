@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -58,21 +59,76 @@ def _commits_touch_backend_app(repo_root: Path, base_branch: str) -> bool:
     return False
 
 
+def _executable_python(path: Path) -> str | None:
+    if path.is_file() and os.access(path, os.X_OK):
+        return str(path)
+    return None
+
+
+def _resolve_openapi_python(repo_root: Path, surface: dict[str, Any]) -> str:
+    """Match feishu_inbound ``resolve_python`` chain for OpenAPI export gates."""
+    surface_repo = _resolve_surface_worktree(surface)
+    try:
+        from feishu_inbound.contracts.toolchain import ToolchainError, resolve_python
+
+        return resolve_python(repo_root, surface_repo=surface_repo)
+    except ImportError:
+        pass
+    except ToolchainError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    override = os.environ.get("FEISHU_INBOUND_PYTHON") or os.environ.get("PYTHON")
+    if override:
+        return override
+
+    worktree_python = repo_root / "backend" / "venv" / "bin" / "python"
+    found = _executable_python(worktree_python)
+    if found:
+        return found
+
+    if surface_repo is not None:
+        surface_python = surface_repo / "backend" / "venv" / "bin" / "python"
+        found = _executable_python(surface_python)
+        if found:
+            return found
+
+    raise RuntimeError(
+        f"No usable Python venv for OpenAPI export under {repo_root}; "
+        "bootstrap backend venv or set FEISHU_INBOUND_PYTHON"
+    )
+
+
 def ensure_openapi_synced(
     repo_root: Path,
     base_branch: str,
     *,
+    surface: dict[str, Any],
     dry_run: bool = False,
 ) -> None:
     """Export OpenAPI spec and verify before PR creation (backend surface)."""
     backend_dir = repo_root / "backend"
-    if not (backend_dir / "Makefile").is_file():
-        raise RuntimeError(f"backend Makefile not found under {repo_root}")
+    export_script = backend_dir / "scripts" / "export_openapi.py"
+    openapi_doc = repo_root / "docs" / "api" / "openapi.json"
+    if not export_script.is_file():
+        raise RuntimeError(f"missing {export_script}")
 
-    run(["make", "openapi"], cwd=backend_dir, dry_run=dry_run)
+    python_bin = _resolve_openapi_python(repo_root, surface)
+    print(f"  OpenAPI gate: using {python_bin}", file=sys.stderr)
+
     if dry_run:
-        run(["make", "check-openapi"], cwd=backend_dir, dry_run=True)
+        print(f"  [DRY RUN] skipped export via {python_bin}", file=sys.stderr)
         return
+
+    export = subprocess.run(
+        [python_bin, str(export_script)],
+        cwd=backend_dir,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if export.returncode != 0:
+        err = (export.stderr or export.stdout or "export_openapi.py failed").strip()
+        raise RuntimeError(f"OpenAPI export failed: {err}")
 
     status = subprocess.run(
         ["git", "status", "--porcelain", "docs/api/openapi.json"],
@@ -92,7 +148,16 @@ def ensure_openapi_synced(
         branch_name = branch[0] if branch else "HEAD"
         run(["git", "push", "origin", branch_name], cwd=repo_root, dry_run=False)
 
-    run(["make", "check-openapi"], cwd=backend_dir, dry_run=False)
+    check = subprocess.run(
+        ["git", "diff", "--exit-code", str(openapi_doc.relative_to(repo_root))],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if check.returncode != 0:
+        err = (check.stdout or check.stderr or "openapi.json out of date").strip()
+        raise RuntimeError(f"OpenAPI check failed: {err}")
 
 
 def maybe_enforce_backend_openapi_gate(
@@ -114,7 +179,7 @@ def maybe_enforce_backend_openapi_gate(
         print("  OpenAPI gate: no backend/app changes; skipped", file=sys.stderr)
         return
     print(f"  OpenAPI gate: syncing spec in {repo_root}", file=sys.stderr)
-    ensure_openapi_synced(repo_root, base_branch, dry_run=dry_run)
+    ensure_openapi_synced(repo_root, base_branch, surface=surface, dry_run=dry_run)
 
 
 def load_surfaces() -> dict[str, Any]:

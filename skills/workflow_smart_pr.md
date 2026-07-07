@@ -31,7 +31,7 @@ python tools/smart_pr.py --issue <N> --surface <surface> --dry-run
 ## 注意事项
 
 - `config/surfaces.yaml` 是分支/reviewer 路由的 SSOT
-- **backend surface OpenAPI gate**：`surface=backend` 且 diff 含 `backend/app/**` 时，PR 创建前自动 `make openapi` + `make check-openapi`（必要时追加 commit 并 push）
+- **backend surface OpenAPI gate**：`surface=backend` 且 diff 含 `backend/app/**` 时，PR 创建前用与 Pipeline D executor 相同的 `resolve_python` 链（worktree venv → surface venv → env）调用 `export_openapi.py`，并以 `git diff --exit-code docs/api/openapi.json` 校验（必要时追加 commit 并 push）；**不**依赖 PATH 裸 `python` / `make openapi`
 - 跨 surface PR（涉及多个 repo）需分别提交，每个 surface 单独 PR
 - PR title 格式：`[ASP-<central_issue_N>] <description>`，方便关联追踪
 - **Pipeline D** 调用本脚本时**不**传 `--handback-requester`；提需人验收指派在 **Pipeline F**（见 `workflow_dev_handback.md`）
