@@ -11,7 +11,7 @@ disable-model-invocation: true
 
 # Feishu Inbound Human Gate (Legacy)
 
-Full skill: [skills/workflow_human_gate.md](../../../skills/workflow_human_gate.md)
+Full skill: [skills/workflow_human_gate.md](../../../../skills/workflow_human_gate.md)
 
 **Prefer** [feishu-inbound-acceptance](../feishu-inbound-acceptance/SKILL.md) for new issues (engine v0.1.17+).
 

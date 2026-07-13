@@ -2,15 +2,16 @@
 name: feishu-inbound-acceptance
 description: >-
   Dev acceptance after Pipeline F handback: record pass/fail via feishu-inbound accept CLI.
-  On pass adds dev-accepted, dispatches scoped promote PR, and assigns release owner for prod gate.
+  On pass (v0.1.32+) adds dev-accepted + Promote handoff and assigns release owner;
+  does not auto-dispatch promote PR (use feishu-inbound-promote skill next).
   Use when user says 验收通过、验收不通过、accept pass、accept fail、dev acceptance、
-  dev-accepted、promote PR、按 Acceptance、issue 验收.
+  dev-accepted、按 Acceptance、issue 验收.
 disable-model-invocation: true
 ---
 
 # Feishu Inbound Acceptance
 
-Full skill: [skills/workflow_acceptance.md](../../../skills/workflow_acceptance.md)
+Full skill: [skills/workflow_acceptance.md](../../../../skills/workflow_acceptance.md)
 
 **ASP 组员（不必 clone rootgrove）**: `docs/onboarding_inbound_skills.md`
 

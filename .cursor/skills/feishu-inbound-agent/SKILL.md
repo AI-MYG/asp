@@ -5,7 +5,7 @@ description: Process feishu-inbound GitHub issues with evidence-based single-pla
 
 # Feishu Inbound Agent (Pipeline C)
 
-Reference spec: [skills/workflow_inbound_agent.md](../../../skills/workflow_inbound_agent.md)
+Reference spec: [skills/workflow_inbound_agent.md](../../../../skills/workflow_inbound_agent.md)
 
 ## ASP team setup
 

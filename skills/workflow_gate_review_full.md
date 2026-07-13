@@ -4,7 +4,7 @@
 
 - **类型**: Workflow
 - **适用场景**: **Pipeline E（统一 gate）**——(1) **AI 门禁**：D 产出 open PR 后、合 dev 前的跨平台只读审查；(2) **人测 gate**：F 之后、业务验收由负责人在 GitHub 代录 pass/fail（与 AI 门禁共用 `## Pipeline E Gate Review` 评论契约）
-- **边界**: 不改代码、不 merge；AI 阶段不 assign 飞书提需人；人测阶段不代替负责人在未收到业务确认时编造 pass
+- **边界**: 不改代码；E pass 后默认 `gh pr merge`（`pipeline_e.auto_merge: true`，可 per-instance 关闭）；AI 阶段不 assign 飞书提需人；人测阶段不代替负责人在未收到业务确认时编造 pass
 - **触发**: issue pr reviewer、gate review、Pipeline E、review-dev-pass、人测 gate、业务验收代确认
 - **工具**: `tools/feishu_inbound/issue_pr_reviewer.py`（含尾部 `human_gate` 队列）
 - **创建日期**: 2026-06-15
@@ -24,7 +24,7 @@
 
 D 已实现并开了 PR，尚未合 dev。E 用**与 D 不同的 Agent 平台**（如 D=OpenCode、E=Cursor）读 PR diff + Analysis，判断：
 
-- **通过** → `review-dev-pass` + AI 通过 comment + 飞书私信 lead
+- **通过** → `review-dev-pass` + 自动 merge 关联 PR（`auto_merge: true` 时）+ AI 通过 comment + 飞书私信 lead
 - **打回** → 去 `executed` + `review-changes-requested` + `## Pipeline E Gate Review` comment，D 下一轮修订
 
 **文档审查（blocking）**：除代码正确性与方案符合度外，E **必须**审查「对应文档是否已更新」。API/对外行为有变更但 PR 未更新 Swagger/OpenAPI（或 Analysis 要求的 API 文档 SSOT）→ **打回**，不能仅因代码逻辑正确而通过。
@@ -86,7 +86,7 @@ executed + open PR
         ↓
    E AI 门禁
         ↓
-┌─ 通过 → review-dev-pass（保留 executed）→ 等待负责人 merge dev
+┌─ 通过 → review-dev-pass（保留 executed）→ auto merge PR（默认开启）→ 等待 Pipeline F / dev CI
 └─ 打回 → review-changes-requested + 去 executed + ## Pipeline E Gate Review → D 修订
 ```
 

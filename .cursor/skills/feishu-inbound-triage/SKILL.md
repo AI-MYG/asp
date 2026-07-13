@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 # Feishu Inbound Triage (Pipeline B)
 
-Workflow: [skills/workflow_inbound_triage.md](../../../skills/workflow_inbound_triage.md)
+Workflow: [skills/workflow_inbound_triage.md](../../../../skills/workflow_inbound_triage.md)
 
 ASP routing SSOT: `skills/workflow_triage_routing.md` (after clone).
 

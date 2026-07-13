@@ -52,7 +52,7 @@ Lead tick (:20/:50) 链式 C → D → E → D' → E' → F dev → **accept** 
      ├─ D' 修订（E 打回后同 tick；补 `executed` + revision queue）
      ├─ E' 再审（`review --re-review-queue`，标准 Pipeline E）
      └─ F dev（人 merge PR + dev CI/CD success）→ sole assignee 提需人 + 验收 comment
-     └─ Acceptance（`accept`）→ dev-accepted + promote PR + requester approve
+     └─ Acceptance（`accept`）→ dev-accepted + Promote handoff → Promote Skill 建 PR → release owner approve
      └─ F prod（prod CI/CD success）→ prod handback 通知
 ```
 
@@ -172,7 +172,7 @@ C/D/E/F 仍可通过 CLI 手动触发（`scan` / `execute` / `review` / `handbac
 | **触发** | 提需人 CLI `accept pass|fail`；或 lead tick `accept --scan-only` |
 | **工具** | `feishu-inbound accept`（引擎 #35） |
 | **扫描** | `review-dev-pass` + F dev handback；无 `dev-accepted` |
-| **pass 输出** | `dev-accepted`；dispatch scoped promote PR；提需人 approve prod PR |
+| **pass 输出** | `dev-accepted` + Promote handoff；`feishu-inbound promote` 门禁后建 PR；release owner approve prod |
 | **fail 输出** | `review-changes-requested`；打回 D |
 | **不做** | merge prod；不替代 F handback |
 

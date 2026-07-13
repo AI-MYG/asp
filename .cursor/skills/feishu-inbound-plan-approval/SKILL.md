@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 # Feishu Inbound Plan Approval
 
-Full skill: [skills/workflow_plan_approval_full.md](../../../skills/workflow_plan_approval_full.md)
+Full skill: [skills/workflow_plan_approval_full.md](../../../../skills/workflow_plan_approval_full.md)
 
 ASP 组员环境: `docs/onboarding_inbound_skills.md`
 

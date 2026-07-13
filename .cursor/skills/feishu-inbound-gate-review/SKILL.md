@@ -8,7 +8,7 @@ description: >-
 
 # Feishu Inbound Gate Review (Pipeline E — AI)
 
-Full skill: [skills/workflow_gate_review_full.md](../../../skills/workflow_gate_review_full.md)
+Full skill: [skills/workflow_gate_review_full.md](../../../../skills/workflow_gate_review_full.md)
 
 Dev **business** acceptance after F uses [feishu-inbound-acceptance](../feishu-inbound-acceptance/SKILL.md), not this skill.
 

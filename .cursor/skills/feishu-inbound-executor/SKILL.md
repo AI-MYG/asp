@@ -9,7 +9,7 @@ description: >-
 
 # Feishu Inbound Executor (Pipeline D)
 
-Full skill: [skills/workflow_inbound_executor.md](../../../skills/workflow_inbound_executor.md)
+Full skill: [skills/workflow_inbound_executor.md](../../../../skills/workflow_inbound_executor.md)
 
 ## ASP team setup
 
