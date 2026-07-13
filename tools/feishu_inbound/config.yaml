@@ -111,6 +111,16 @@ pipeline_f:
   prod_eligibility_label: dev-accepted
   promote:
     dispatch_event: feishu-inbound-promote
+    # SSOT mirrors config/surfaces.yaml base/production branches.
+    # Without this, branch_mapping_for_surface defaults target=production for ALL
+    # surfaces (breaks admin/app/wecom which use main) — see #291 wrong-surface dispatch.
+    branch_mapping:
+      backend: { source: dev, target: production }
+      admin: { source: dev, target: main }
+      app: { source: dev, target: main }
+      wecom: { source: dev, target: main }
+      websites: { source: dev, target: main }
+      canonical: { source: dev, target: main }
   scan:
     org: AI-MYG
     limit: 100
@@ -151,13 +161,14 @@ pipeline_f:
 acceptance:
   release_owner: "369795172"
 
-# --- Pipeline E: gate review (review only, never edits code / merges) ---
+# --- Pipeline E: gate review; auto-merge PR after pass when auto_merge: true ---
 # PR body records D via "**Implemented by**: `opencode/glm-5.2`" → E uses cursor_sdk/composer-2.5.
 # Overrides: PIPELINE_E_REVIEW_EXECUTOR, PIPELINE_E_REVIEW_MODEL (env) > fields below.
 # Feishu notify: open_id SSOT in feishu_notify below (app-scoped, not secret).
 #   app_id/secret stay in Keychain (TTS_BROADCAST_* or IC_FEISHU_* per bot).
 #   Env PIPELINE_E_FEISHU_OPEN_ID / PIPELINE_E_FEISHU_BOT can override config.
 pipeline_e:
+  auto_merge: true
   review_executor: cursor_agent
   review_model: composer-2.5
   feishu_notify:
