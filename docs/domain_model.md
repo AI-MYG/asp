@@ -129,7 +129,36 @@ class（班级，course_level_id「基于第一个课程推导」，班主任 = 
 
 ---
 
-## 七、给 agent 的使用约定
+## 七、进度与完成：按 `course_unit.type` 双模型（勿混口径）
+
+> **决策 SSOT**：[`docs/decisions/0004-unit-completion-dual-model.md`](./decisions/0004-unit-completion-dual-model.md)。  
+> 触发表：themes `isComplete`、单元完成 API、主页 theme_progress、任何「单元是否完成」判断。
+
+`course_unit.type` ∈ {`mission`, `game`}。两套完成语义并行，**不能**用一张「统一 Progress 表」覆盖全部：
+
+| | `mission` | `game` |
+|--|-----------|--------|
+| 子内容 | `course_media` | `game_pack` |
+| 单元完成如何得到 | 媒体全部完成 → **派生** | 前端上报完成事件（后端不校验） |
+| 事实落点 | `user_progress.completed_media` | `user_course_unit_game_completed`（含 `class_id`） |
+| 读对齐 | 媒体进度 / 成就聚合路径 | `POST/GET .../course-unit/complete(-status)` |
+
+**`user_progress` 的边界**：仍是**媒体进度与积分域**权威；`completed_units` JSONB **禁止**再当作单元完成事实源（现代 game 上报不写它；形态上最多是未来投影，现状是死字段）。
+
+**`user_course_unit_game_completed` 的边界**：仅是 **game 单元完成**的 ODS/事件表，不是「一切单元」的普适表。派生方向只能是 GameCompleted →（可选）汇总投影，不可反向。
+
+**themes `isComplete`（#265）**：只统计 game unit；完成态必须读 GameCompleted，并与 `complete-status` 的 class 规则对齐（有 `class_id` 严格匹配，无则任意班）。
+
+```
+mission:  media 完成上报 → user_progress.completed_media →（派生）单元完成度
+game:     前端裁定 → POST /course-unit/complete → user_course_unit_game_completed
+                                                   ↑
+                         themes isComplete / complete-status 必须读这里
+```
+
+---
+
+## 八、给 agent 的使用约定
 
 - 在任何 ASP surface repo 工作、涉及课程 / 班级 / 媒体 / 绘本 / 排期 / 解锁逻辑时，先对照本文确认「这件事属于模板侧还是交付侧」。
 - 不要把班级级的排期 / 解锁信息写进模板内容表（`course_media` / `course_unit`）。
@@ -137,6 +166,7 @@ class（班级，course_level_id「基于第一个课程推导」，班主任 = 
 - **排期是头等大事**：`unlock_at`（绝对时间）**绝不能跨班原样拷贝**。同 level 不同班 `start_date` 必然不同，绝对时间必须由「目标班 `start_date` + `unlock_after_days`」按班重锚。相对量是 SSOT，绝对量是派生投影。
 - **排序属业务 / unit 维度**：`unit_order` 是 SSOT，`course_order` 只是其按班投影；但**现网二者已漂移（高阶/中阶约 363/439 不等），读取顺序一律以 `unit_order` 为准，不要假设相等**。不要在 sync 里隐式重排 `course_order`；确需重排走「按 unit_order 提议 → 业务确认」的显式全量 reorder 接口。
 - **按班差异只在内容，不在排序 / 排期**：富文本等可有按班版本（`course_richtext`），但「第几天 / 先后 / 何时解锁」永远以 unit 维度 + 本班 `start_date` 为准。
+- **单元完成先看 type**：mission → 媒体派生；game → GameCompleted 事件。禁止用 `user_progress.completed_units` 表达完成；禁止把 mission 的「媒体聚合」套到 game themes。详见 ADR 0004。
 - 班主任「改课程内容」= 改 unit（业务侧），入口通常是 demo 班；不要把它理解成改某个交付班的私有数据。
-- 本文为 SSOT；各 surface repo 的领域模型小节只是指针，发现冲突以本文为准。
+- 本文为 SSOT；各 surface repo 的领域模型章节只是指针，发现冲突以本文为准。
 - **媒体入库与 COS 数据流**（初始化 / 管理端上传 / 播放查询）：见 [tencent-cos-course-media-data-flow.md](./tencent-cos-course-media-data-flow.md)。

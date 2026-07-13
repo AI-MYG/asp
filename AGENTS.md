@@ -20,7 +20,9 @@ ASP 后端是**两套平行结构**：**模板侧**（`course_level` → `course
 
 排序（次要）：`course_unit.unit_order` 是排序唯一 SSOT，`course.course_order` 只是其按班投影——但**现网二者已漂移（高阶/中阶约 363/439 不等），读取一律以 `unit_order` 为准，勿假设相等**。demo 班是等级业务内容的标准定义实例，班主任「维护课程内容」本质是维护 unit；sync 不应隐式重排 `course_order`，确需重排走「按 unit_order 提议 → 业务确认」（详见 ADR 0002）。
 
-完整 SSOT：[`docs/domain_model.md`](docs/domain_model.md)；架构决策：[`docs/decisions/0001-course-interactive-book-as-template-media.md`](docs/decisions/0001-course-interactive-book-as-template-media.md)、[`docs/decisions/0002-course-ordering-is-unit-dimension.md`](docs/decisions/0002-course-ordering-is-unit-dimension.md)、[`docs/decisions/0003-schedule-unlock-must-reanchor-to-class-start-date.md`](docs/decisions/0003-schedule-unlock-must-reanchor-to-class-start-date.md)。
+进度与完成（易混）：`course_unit.type` 双模型——`mission` 由 `completed_media` 派生单元完成；`game` 由 `user_course_unit_game_completed` 前端事件记账。`user_progress` 仍是媒体进度权威；`completed_units` **不是**单元完成事实源。themes `isComplete` 只计 game，必须读 GameCompleted（详见 ADR 0004、`domain_model.md` §七）。
+
+完整 SSOT：[`docs/domain_model.md`](docs/domain_model.md)；架构决策：[`docs/decisions/0001-course-interactive-book-as-template-media.md`](docs/decisions/0001-course-interactive-book-as-template-media.md)、[`docs/decisions/0002-course-ordering-is-unit-dimension.md`](docs/decisions/0002-course-ordering-is-unit-dimension.md)、[`docs/decisions/0003-schedule-unlock-must-reanchor-to-class-start-date.md`](docs/decisions/0003-schedule-unlock-must-reanchor-to-class-start-date.md)、[`docs/decisions/0004-unit-completion-dual-model.md`](docs/decisions/0004-unit-completion-dual-model.md)。
 
 ## Surface 约定
 
