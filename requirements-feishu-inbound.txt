@@ -2,5 +2,4 @@
 feishu-inbound==0.1.33
 python-dotenv>=1.0
 requests>=2.28
-# Until GitHub Release wheel for 0.1.33: pip install -e ../feishu-inbound-skill
 # Local dev: pip install -e ../feishu-inbound-skill  (or omit FEISHU_INBOUND_INSTALL=package)
