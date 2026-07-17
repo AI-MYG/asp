@@ -2,7 +2,7 @@
 # Pipeline C — Per-developer issue scanner with difficulty-aware analysis
 #
 # Scans AI-MYG org for open issues assigned to GITHUB_ASSIGNEE (all repos),
-# runs deep code analysis via OpenCode AgentClient, posts analysis comment.
+# runs deep code analysis via AgentClient (rootgrove routing; Cursor preferred), posts analysis comment.
 #
 # Scheduled via launchd: com.asp.feishu-inbound-agent
 # Schedule: launchd_schedules.feishu_inbound_agent in config.yaml

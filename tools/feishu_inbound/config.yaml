@@ -67,11 +67,14 @@ advisor:
   enabled: false
   model: claude-opus-4-6
   import_chain:
-    - tools.agent_clients.AgentClient
+    - tools.agent_clients.client.AgentClient
 
+# C/D/E agent routing: tools/agent_client.py is a thin facade → rootgrove
+# tools.agent_clients (SSOT: rootgrove tools/agent_clients/config.yaml).
 agent_client:
   import_chain:
     - tools.agent_client.AgentClient
+    - tools.agent_clients.client.AgentClient
 
 surface_worktrees:
   backend: projects/asp/backend
@@ -162,25 +165,22 @@ acceptance:
   release_owner: "369795172"
 
 # --- Pipeline E: gate review; auto-merge PR after pass when auto_merge: true ---
-# PR body records D via "**Implemented by**: `opencode/glm-5.2`" → E uses cursor_sdk/composer-2.5.
-# Overrides: PIPELINE_E_REVIEW_EXECUTOR, PIPELINE_E_REVIEW_MODEL (env) > fields below.
+# D prefers Cursor (via rootgrove AgentClient) → E must use a different platform.
+# Preferred: Claude Code; OpenCode remains fallback. Overrides via
+# PIPELINE_E_REVIEW_EXECUTOR / PIPELINE_E_REVIEW_MODEL.
 # Feishu notify: open_id SSOT in feishu_notify below (app-scoped, not secret).
 #   app_id/secret stay in Keychain (TTS_BROADCAST_* or IC_FEISHU_* per bot).
 #   Env PIPELINE_E_FEISHU_OPEN_ID / PIPELINE_E_FEISHU_BOT can override config.
 pipeline_e:
   auto_merge: true
-  review_executor: cursor_agent
-  review_model: composer-2.5
+  review_executor: claude_code
+  review_model: claude-sonnet-4
   feishu_notify:
     bot: tts
     open_ids:
       tts: ou_6d0ef3a7cfa50efecff07794ce084aee
       ic: ou_40ce8162e8c5bd2d95d6570886eb6a65
   review_route_pool:
-    - executor: cursor_agent
-      model: composer-2.5
-    - executor: cursor_sdk
-      model: composer-2.5
     - executor: claude_code
       model: claude-sonnet-4
     - executor: opencode
