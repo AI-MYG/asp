@@ -101,6 +101,13 @@ launchd_schedules:
 lead_tick:
   revision_execute_after_review: true
 
+# Pipeline C: avoid head-of-line starvation when one issue's agent run fails
+# (engine v0.1.33+: fair queue + soft cooldown; lighter than D's execution-exhausted)
+pipeline_c:
+  batch: 3
+  max_attempts: 2
+  cooldown_minutes: 60
+
 # Pipeline D auto-retry limits (engine v0.1.20+); v0.1.26+ clears stale local counters when execution-exhausted removed
 pipeline_d:
   max_attempts: 3
