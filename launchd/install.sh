@@ -71,20 +71,29 @@ fi
 
 mkdir -p "$LAUNCH_AGENTS"
 
-# Bootstrap asp-infra venv + feishu-inbound engine (Pipeline B–F wrappers)
+# Bootstrap asp-infra venv (legacy fallback) + verify rootgrove venv for lead-tick (cursor_sdk).
+# Lead tick resolves Python via scripts/resolve_venv_python.sh → rootgrove venv first.
+ROOTGROVE_ROOT="${WORKSPACE_ROOT:-$HOME/CursorWorks/rootgrove}"
+if [ ! -x "$ROOTGROVE_ROOT/venv/bin/python" ]; then
+  echo "WARN: rootgrove venv missing at $ROOTGROVE_ROOT/venv — lead-tick needs cursor_sdk there" >&2
+fi
 if [ ! -x "$REPO_ROOT/venv/bin/python" ]; then
-  echo "Creating asp-infra venv..."
+  echo "Creating asp-infra venv (fallback)..."
   python3 -m venv "$REPO_ROOT/venv"
 fi
 if ! "$REPO_ROOT/venv/bin/python" -c "import feishu_inbound" 2>/dev/null; then
-  echo "Installing feishu-inbound engine into asp-infra venv..."
+  echo "Installing feishu-inbound engine into asp-infra venv (fallback)..."
   bash "$REPO_ROOT/scripts/install_feishu_inbound_engine.sh"
 fi
 # opencode_job.py (Pipeline C/D analysis) needs dotenv in asp-infra venv
 "$REPO_ROOT/venv/bin/pip" install -q python-dotenv requests 2>/dev/null || true
 
 SCHEDULE_PY="$REPO_ROOT/launchd/schedule_config.py"
-VENV_PYTHON="$REPO_ROOT/venv/bin/python"
+if [ -x "$ROOTGROVE_ROOT/venv/bin/python" ]; then
+  VENV_PYTHON="$ROOTGROVE_ROOT/venv/bin/python"
+else
+  VENV_PYTHON="$REPO_ROOT/venv/bin/python"
+fi
 TRIAGE_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml triage)
 LEAD_TICK_SCHEDULE=$("$VENV_PYTHON" "$SCHEDULE_PY" calendar-xml lead_tick)
 
@@ -235,4 +244,5 @@ echo "  Observer:  daily at 22:00       ($OBSERVER_LABEL)"
 echo "  Reflector: Sunday at 10:00      ($REFLECTOR_LABEL)"
 echo "  Triage:    $("$VENV_PYTHON" "$SCHEDULE_PY" summary triage) ($TRIAGE_LABEL)"
 echo "  Lead tick: $("$VENV_PYTHON" "$SCHEDULE_PY" summary lead_tick) ($LEAD_TICK_LABEL) — C+D+E+F chain"
+echo "  Lead tick Python: rootgrove venv via scripts/resolve_venv_python.sh (re-run install.sh to reload plist)"
 echo "  Logs: $REPO_ROOT/logs/"

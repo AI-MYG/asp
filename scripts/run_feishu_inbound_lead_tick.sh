@@ -14,11 +14,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source=load_asp_env.sh
 source "$SCRIPT_DIR/load_asp_env.sh"
-VENV_PYTHON="$REPO_ROOT/venv/bin/python"
-
-if [ ! -f "$VENV_PYTHON" ]; then
-  VENV_PYTHON="${ASP_WORKTREE_ROOT:-$HOME/CursorWorks/rootgrove}/venv/bin/python"
-fi
+# shellcheck source=resolve_venv_python.sh
+source "$SCRIPT_DIR/resolve_venv_python.sh"
+resolve_venv_python
+ensure_feishu_inbound_imports
 
 # shellcheck source=pipeline_skip_if_weekend.sh
 source "$SCRIPT_DIR/pipeline_skip_if_weekend.sh"
