@@ -54,7 +54,8 @@ sequenceDiagram
 
 **要点**
 
-- **Pipeline F** 只看 integration 分支上的 dev CI/CD **成功**，不等 promote merge，也不等 production deploy。
+- **Pipeline F Dev Handback** 只看 integration 分支上的 dev CI/CD **成功**，不等 promote merge，也不等 production deploy。
+- **Pipeline F Prod Handback** 由成功的 production workflow dispatch 触发；同一 production tip 可累计包含多个 promote merge，因此 ASP 会扫描全部 `dev-accepted` issue，而不是只处理 tip 最后一个 issue。
 - **Production 飞书卡片** 在 promote PR merge 之后的 release/deploy workflow 结束时发出，与 F 是不同阶段。
 
 ---
@@ -73,6 +74,7 @@ sequenceDiagram
 | Pipeline F handback | dev CI/CD 在 merge commit 上 success | Issue 评论 `## Pipeline F Dev Handback`；sole assignee → GitHub 负责人 |
 | Promote PR merge | 负责人手动 | production 分支更新；触发 production deploy |
 | Production deploy 完成 | release/deploy workflow | Actions run 绿/红；飞书卡片（见 3.2） |
+| Pipeline F Prod Handback | production workflow success | Issue 评论 `## Pipeline F Prod Handback`；sole assignee 恢复为 issue 提需人 |
 
 ### 3.2 飞书群机器人（CHATOPS Webhook）
 
@@ -122,6 +124,10 @@ F 的 dev CI/CD workflow 名称 SSOT：`tools/feishu_inbound/config.yaml` → `p
 | `AI-MYG/asp-app` | `🚀 CI/CD Multi-Device Pipeline - Flutter Kiosk App` |
 
 wecom / canonical 尚未列入 Pipeline F；接入后在此表与 `config.yaml` 同步补充。
+
+Prod dispatch 与 dev 的处理粒度不同：dev 继续从 `head_sha` 解析单个 issue；prod 运行全量 `handback --stage prod`。引擎会接受 promote merge SHA 本身的成功 run，或接受包含该 SHA 的后续成功 production tip，避免 GitHub Actions concurrency 取消早期 run 时漏 handback。
+
+Prod handback 是幂等的：marker 与 sole assignee 都正确时直接跳过；marker 已存在但 assignee 仍是 release owner 或有额外 assignee 时进入 **repair-only**，只修复归属，不重复发 Issue 评论或飞书通知。
 
 ---
 

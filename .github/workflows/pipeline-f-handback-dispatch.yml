@@ -56,8 +56,21 @@ jobs:
             exit 1
           fi
           export GH_TOKEN="$GITHUB_TOKEN"
+          STAGE="${CICD_STAGE:-dev}"
+          if [ "$STAGE" = "prod" ]; then
+            # A successful production tip can contain multiple promote PRs. Scan all
+            # accepted issues so every promote merge covered by this tip is handed back.
+            "$PY" -m feishu_inbound.cli handback \
+              --config tools/feishu_inbound/config.yaml \
+              --stage prod
+            exit 0
+          fi
+          if [ "$STAGE" != "dev" ]; then
+            echo "::error::Unsupported cicd_stage: $STAGE"
+            exit 1
+          fi
           if [ -z "${REPO:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
-            echo "::error::Missing repo or head_sha in dispatch payload"
+            echo "::error::Missing repo or head_sha in dev dispatch payload"
             exit 1
           fi
           ISSUE=$("$PY" - <<'PY'
@@ -68,7 +81,7 @@ jobs:
           PY
           )
           if [ -z "${ISSUE:-}" ]; then
-            echo "No issue number resolved from merge commit; skipping."
+            echo "No issue number resolved from dev merge commit; skipping."
             exit 0
           fi
           "$PY" -m feishu_inbound.cli handback \
@@ -77,4 +90,4 @@ jobs:
             --repo "$REPO" \
             --issue "$ISSUE" \
             --head-sha "$HEAD_SHA" \
-            --cicd-stage "${CICD_STAGE:-dev}"
+            --cicd-stage dev
