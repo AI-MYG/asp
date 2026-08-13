@@ -34,3 +34,24 @@ ensure_feishu_inbound_imports() {
     fi
   fi
 }
+
+report_feishu_inbound_runtime() {
+  local req="${REPO_ROOT:-}/requirements-feishu-inbound.txt"
+  local expected=""
+  if [ -f "$req" ]; then
+    expected="$(sed -n 's/^feishu-inbound==//p' "$req" | head -1 | tr -d '[:space:]')"
+  fi
+
+  local runtime
+  runtime="$($VENV_PYTHON -c 'import feishu_inbound; print(feishu_inbound.__version__); print(feishu_inbound.__file__)')"
+  local actual="${runtime%%$'\n'*}"
+  local module_path="${runtime#*$'\n'}"
+  echo "feishu-inbound runtime: version=${actual} expected=${expected:-untracked} python=${VENV_PYTHON} module=${module_path}"
+
+  if [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
+    echo "WARN: feishu-inbound runtime version ${actual} != instance pin ${expected}" >&2
+    if [ "${FEISHU_INBOUND_STRICT_VERSION:-0}" = "1" ]; then
+      return 1
+    fi
+  fi
+}

@@ -85,6 +85,7 @@ class AgentClient:
         model: str | None = None,
         finalize_prompt: str | None = None,
         validate: Callable[[str], bool] | None = None,
+        repair_prompt_builder: Callable[[str], str] | None = None,
     ) -> Any:
         return self._inner.run(
             prompt,
@@ -95,4 +96,5 @@ class AgentClient:
             model=model or self._model,
             finalize_prompt=finalize_prompt,
             validate=validate,
+            repair_prompt_builder=repair_prompt_builder,
         )
