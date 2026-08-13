@@ -107,6 +107,8 @@ pipeline_c:
   batch: 3
   max_attempts: 2
   cooldown_minutes: 60
+  # Dedicated rootgrove route; generic `analysis` model changes must not alter C.
+  agent_intent: feishu_inbound_analysis
 
 # Pipeline D auto-retry limits (engine v0.1.20+); v0.1.26+ clears stale local counters when execution-exhausted removed
 pipeline_d:

@@ -18,6 +18,10 @@ source "$SCRIPT_DIR/load_asp_env.sh"
 source "$SCRIPT_DIR/resolve_venv_python.sh"
 resolve_venv_python
 ensure_feishu_inbound_imports
+# Production lead ticks fail closed on engine/pin drift. Operators may set 0
+# explicitly for emergency diagnosis, but the instance default is strict.
+export FEISHU_INBOUND_STRICT_VERSION="${FEISHU_INBOUND_STRICT_VERSION:-1}"
+report_feishu_inbound_runtime
 
 # shellcheck source=pipeline_skip_if_weekend.sh
 source "$SCRIPT_DIR/pipeline_skip_if_weekend.sh"
