@@ -79,6 +79,20 @@ gh auth login
 
 `bash scripts/run_accept.sh pass --issue N --repo AI-MYG/asp-<surface>`
 
+### 我是提需人，验收不通过时
+
+1. **先确认 dev 能复现**：环境、账号、操作步骤写清楚。
+2. **对照 F handback / Analysis**：说明哪条业务验收点没满足（不要只写「不对」）。
+3. **用 CLI 打 fail**（必填 reason）：
+
+```bash
+bash scripts/run_accept.sh fail --issue N --repo AI-MYG/asp-<surface> --reason "复现步骤 + 期望 vs 实际"
+```
+
+4. **默认会回 Pipeline D 修订**（assignee 下一轮改代码）；D 会读你 fail 评论的**全文**。
+5. **若问题是方案/口径/analysis 写错了**（不是实现 bug）：请负责人在 fail 后加 label `request-reanalysis`，让 C 重跑分析；不要只在 issue 里自由留言指望引擎自动转段。
+6. **不要**只手写 `## Dev Acceptance` 评论代替 `run_accept.sh`。
+
 ### 我是总监机，跑分诊
 
 `bash scripts/run_feishu_inbound_triage.sh`（:10/:40 launchd）
