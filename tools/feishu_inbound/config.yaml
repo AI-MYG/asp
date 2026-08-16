@@ -44,7 +44,30 @@ env_loader:
 
 prompts:
   domain_context: |
-    ASP 飞书入站流水线。分析/执行前阅读对应 surface worktree 与 AGENTS.md。
+    ## ASP 代码库（必须先阅读再写结论）
+
+    - **Monorepo 路径**: `projects/asp/`
+    - **分析前已执行 worktree sync**：各 surface 的 base 分支已与 `origin` 对齐
+    - **Surface 拓扑**（SSOT: `config/surfaces.yaml`）:
+
+    | Surface | GitHub Repo | 本地路径 | 代码根 |
+    |---------|-------------|----------|--------|
+    | backend | AI-MYG/asp-backend | projects/asp/backend | backend/app/ |
+    | admin | AI-MYG/asp-admin | projects/asp/admin | nativesense-admin/src/ |
+    | app | AI-MYG/asp-app | projects/asp/app | inputbaby_app/ |
+    | wecom | AI-MYG/asp-wecom | projects/asp/wecom | wecom_frontend/src/ |
+    | websites | AI-MYG/asp-websites | projects/asp/websites | websites/ |
+    | canonical | AI-MYG/asp-canonical | projects/asp/canonical | (markdown/yaml) |
+
+    ## 硬规则（违反即 Analysis 失败）
+
+    1. `/api/v1/admin/*` 在 **asp-backend** 实现；不因 `inputer-admin` 域名改 asp-admin。
+    2. **禁止** `projects/asp/admin/backend/` 作为改动或执行目标（拆仓遗留）。
+    3. Issue 所在 GitHub repo 决定执行 surface 与 worktree。
+    4. Evidence、改动文件、执行路径 Worktree 必须在同一 surface 下。
+    5. Evidence 已在 asp-backend 找到实现时，禁止推荐在 asp-admin 重建。
+
+    **分析前**：在对应 surface 目录检索 Issue 关键词，打开并阅读相关文件。
 
 assignees:
   by_id:
@@ -147,7 +170,7 @@ pipeline_f:
     requester_open_ids: {}
   env_urls:
     dev: "https://inputer-admin.aimyg.com"
-    prod: "https://admin.aimyg.com"
+    prod: "https://inputer-api.aimyg.com"
   dev_cicd:
     AI-MYG/asp-backend:
       workflow: "Backend Dev Test Container"
