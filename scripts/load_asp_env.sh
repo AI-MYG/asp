@@ -41,3 +41,15 @@ export OPENCODE_USER="${OPENCODE_USER:-${OPENCODE_USERNAME:-opencode}}"
 export OPENCODE_PASS="${OPENCODE_PASS:-${OPENCODE_PASSWORD:-}}"
 export OPENCODE_USERNAME="${OPENCODE_USERNAME:-$OPENCODE_USER}"
 export OPENCODE_PASSWORD="${OPENCODE_PASSWORD:-$OPENCODE_PASS}"
+
+# gh CLI / GitHub API (GraphQL: triage, lead-tick, observer) need outbound HTTPS.
+# When mihomo is up on :7890 and no proxy is already set (launchd has a bare env),
+# point HTTP(S)_PROXY at it. Skip if the port is down so we do not force a dead
+# proxy onto jobs (fall back to direct). Pattern parity: tools/feishu_inbound/load_personal_env.sh.
+if [[ -z "${HTTPS_PROXY:-}${HTTP_PROXY:-}${https_proxy:-}${http_proxy:-}" ]]; then
+  if (echo >/dev/tcp/127.0.0.1/7890) >/dev/null 2>&1; then
+    export HTTP_PROXY="${HTTP_PROXY:-http://127.0.0.1:7890}"
+    export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:7890}"
+    export ALL_PROXY="${ALL_PROXY:-http://127.0.0.1:7890}"
+  fi
+fi
