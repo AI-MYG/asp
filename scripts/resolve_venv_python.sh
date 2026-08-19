@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Resolve Python for ASP feishu-inbound pipeline (Pipeline B–F).
-# Prefers rootgrove venv (cursor_sdk + editable feishu_inbound) over asp-infra venv.
+# Prefers rootgrove venv (cursor_sdk + pinned feishu_inbound wheel) over asp-infra venv.
 #
 # Usage (after load_asp_env.sh):
 #   source "$SCRIPT_DIR/resolve_venv_python.sh"
