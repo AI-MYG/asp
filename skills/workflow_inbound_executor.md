@@ -92,6 +92,7 @@ python tools/feishu_inbound/issue_executor.py --issue 441 --force
 5. 若某步骤无法实现（文件不存在、接口已变），commit message 注明差异
 6. **API 文档**：涉及 HTTP API 变更时，同一 PR 内更新 Swagger/OpenAPI（或 Analysis 所列 API 文档 SSOT）；仅改代码不更文档视为未完成
 7. **App 版本**：涉及 App 构建/安装包交付时，同一 PR 内按 surface 约定 bump 版本号；仅改代码不 bump 视为未完成
+8. **禁止** `git add -f`；`contexts/life_record/profile/**` 只落本机（pre-commit hook：`bash tools/githooks/install.sh`）
 
 ---
 

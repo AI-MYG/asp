@@ -101,6 +101,28 @@ bash scripts/run_accept.sh fail --issue 148 --repo AI-MYG/asp-backend --reason "
 
 ---
 
+## 特殊场景：Promote Plan 确认（提需人）
+
+多轮 revision 或跨 issue 接线时，issue 上会出现 `## Promote Plan — Pending Confirmation`（含 YAML 口径：文件集、携带文件、门禁预检）。这表示**标准引擎 promote 无法安全表达该 issue 的发布范围**（单锚定 PR 会丢文件，见 asp-backend #464），需要提需人确认携带方案。
+
+验收通过后分两步给信号（都在 issue 评论）：
+
+```markdown
+## Dev Acceptance
+/accept pass
+
+## Promote Plan Confirmation
+/promote-plan confirm
+```
+
+- `/promote-plan confirm`：按 plan 执行（Promote Skill 构造累计文件集分支 + import/openapi 门禁 + PR）
+- `/promote-plan fail` + 理由：拒绝携带方案，promote 改串行口径
+- Plan 状态 `blocked`（被其他 issue 阻塞）时无需动作，阻塞解除后自动排队
+
+**Agent 注意**：执行 promote 前必须先扫 issue comments 找 `## Promote Plan`；存在 plan 的 issue 禁止标准引擎 dispatch。协议细节见 rootgrove `rules/skills/workflow_feishu_inbound_promote.md` 的「Promote Plan Override 协议」节。
+
+---
+
 ## Cursor Skill 使用注意
 
 完整表见 [inbound_pipeline_team_guide.md](inbound_pipeline_team_guide.md)。核心规则：

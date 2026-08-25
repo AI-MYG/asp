@@ -85,6 +85,21 @@
 | 收敛后用问句问过程（「是否 dry-run」「需要的话我可以查库」） | Mandatory Gate 写进步骤；Human 只审整条方案一次（T03） |
 | 「前端也可以/后端也可以」并列 | 必须按最小 effort 选定唯一落点 |
 | 模糊待办（「需要进一步确认代码位置」） | Agent 应自行检索代码库 |
+| `projects/asp/admin/backend/` 作为改动或执行目标 | 拆仓遗留副本；`/api/v1/admin/*` 在 asp-backend，管理端域名不等于 asp-admin 仓库 |
+
+### Analysis 一致性 Gate（engine ≥ 0.1.36）
+
+Pipeline C 在贴 `analyzed` 前除格式校验外，还执行 `analysis_consistency`（`feishu-inbound-skill` `scanner/analysis_consistency.py`）：
+
+| 规则 | 说明 |
+|------|------|
+| `issue_repo → surface` | `AI-MYG/asp-backend` issue 强制 `primary_surface=backend`，不受关键词顺序影响 |
+| `legacy_admin_backend` | 禁止推荐 `projects/asp/admin/backend/` |
+| `repo_surface_worktree` | 执行路径 Worktree 必须与 issue repo 对应 surface 一致 |
+| `branch_surface` | `issue-N/{surface}` 与 repo 绑定 surface 一致 |
+| `evidence_plan_prefix` | Evidence 与改动文件须在同一 worktree 下 |
+
+失败 → 不 post Analysis，打 `analysis-failed`。实例侧 `prompts.domain_context`（asp-infra `tools/feishu_inbound/config.yaml`）须含 ASP 拓扑硬规则。
 
 ### 必须
 
@@ -193,7 +208,7 @@ export GITHUB_ASSIGNEE=marviny   # 或本机对应 GitHub login
 
 ## 相关
 
-- [**Feishu Inbound Pipeline（顶层编排）**](./workflow_feishu_inbound_pipeline.md) — 全流程总览 A–E
+- [**Feishu Inbound Pipeline（顶层编排）**](./workflow_feishu_inbound_pipeline.md) — 全流程总览 A–F + Acceptance/Promote
 - [**Stage D: Feishu Inbound Executor**](./workflow_feishu_inbound_executor.md) — 自动执行 + Smart PR（本 workflow 的下游）
 - [Feishu Inbound Pipeline 任务文档](../../docs/tasks/asp/20260519_feishu_inbound_requirement_pipeline.md)
 - [Smart PR Workflow](./workflow_smart_pr.md)

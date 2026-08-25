@@ -44,23 +44,20 @@
 
 若有 central issue（`AI-MYG/asp#N`）链接，**同时** handback central 与 surface execution issue。
 
-### F 验收评论（目标契约）
+### F 验收评论（SSOT）
 
-引擎与 instance 应向此格式收敛（实现状态见文末「引擎对齐」）：
+指派分叉：提需人有 GitHub 账号 → 指派本人（`验收方式: 本人验收`）；无则指派 issue 建单人代理（`验收方式: 负责人代确认`）。
 
 ```markdown
 ## Pipeline F Dev Handback
 
-飞书提需人: <姓名或飞书侧标识>
-GitHub负责人: <GitHub 用户名>
-验收方式: 负责人代确认
+飞书提需人: <body Author 值；无则 owner 显示名+（代理建单）>
+GitHub负责人: @<acceptance owner>
+验收方式: 本人验收——请你在 dev 环境验收后执行 accept
+# 或：负责人代确认——业务验收由提需人 X 确认，你代录 accept
 
-PR 已合入 dev 且 dev 环境 CI/CD 已成功：<PR URL>
-
-请在 dev 环境验收。业务侧确认后，由 **GitHub 负责人** 在本 issue 评论，格式见 Pipeline E 人测 gate（`## Pipeline E Gate Review` + `/gate pass` 或 `/gate fail`）。
+PR 已合入 dev 且 CI/CD 已通过：<PR URL>
 ```
-
-personal 可简写：`飞书提需人` 与 `GitHub负责人` 填同一人，`验收方式` 可写「本人验收」。
 
 ---
 
@@ -125,12 +122,11 @@ Personal：`source tools/feishu_inbound/load_personal_env.sh`，config 为 `conf
 
 ---
 
-## 已知限制与引擎对齐
+## 已知限制
 
-- **飞书提需人无 GitHub 账号**：F 仍 assign **负责人**；不得要求飞书提需人亲自在 issue 评论。业务事实来自飞书，GitHub 状态由负责人代录。
-- **Bot 建单**：若 GitHub 建单人为机器人且无法解析负责人，F 不应发「完成态」F 验收评论，应告警由人处理。
-- **与 rootgrove `tools/smart_pr.py` 区分**：Feishu inbound 的 D 使用 instance `smart_pr.py`，开 PR 时不 assign 飞书提需人。
-- **引擎对齐**：feishu-inbound-skill PR #15 已废弃 `ready-for-acceptance`、引入 F marker；**飞书提需人 / 负责人分字段**与负责人代确认模板为文档 SSOT，引擎/instance 下一版对齐（issue #11 后续）。
+- **飞书提需人无 GitHub 账号**：F 指派 **GitHub 负责人**（建单人代理或 `acceptance.fallback_owner`）；不得要求飞书提需人亲自在 issue 评论。业务事实来自飞书，GitHub 状态由负责人代录。
+- **Bot 建单**：从 body `**Author**` + team_registry / assignees 反查；未命中则 fallback_owner；仍失败则执行人本人验收并在评论标明。
+- **与 rootgrove `tools/smart_pr.py` 区分**：Feishu inbound 的 D 使用 instance `smart_pr.py`，开 PR 时不 assign 飞书提需人。F 段指派由引擎 `issue_dev_handback` 接管，不再委托 instance `handback_to_requester`。
 
 ---
 

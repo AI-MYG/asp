@@ -14,6 +14,10 @@ Full skill: [skills/workflow_promote.md](../../../../skills/workflow_promote.md)
 
 **ASP 组员（不必 clone rootgrove）**: `docs/onboarding_inbound_skills.md`
 
+## 前置检查（先于下面任何 CLI）
+
+扫 issue comments：存在 `## Promote Plan` 区块的 issue **禁止跑下方标准 CLI**，按 plan YAML 口径执行（见 full skill「Promote Plan 挡板」节）。
+
 ## 必须执行
 
 ```bash

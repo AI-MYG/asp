@@ -56,6 +56,6 @@
 
 ## 相关
 
-- [**Feishu Inbound Pipeline（顶层编排）**](./workflow_feishu_inbound_pipeline.md) — 全流程总览 A–E
+- [**Feishu Inbound Pipeline（顶层编排）**](./workflow_feishu_inbound_pipeline.md) — 全流程总览 A–F + Acceptance/Promote
 - [Feishu Inbound Pipeline 任务文档](../../docs/tasks/asp/20260519_feishu_inbound_requirement_pipeline.md)
 - [Issue Scanner 深度分析](./workflow_feishu_inbound_agent.md)（Pipeline C）

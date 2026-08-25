@@ -7,7 +7,7 @@
 ## 元数据
 
 - **类型**: Workflow（顶层编排）
-- **适用场景**: 飞书需求池 → GitHub Issue → Agent 深度分析的**完整入站流水线**
+- **适用场景**: 飞书需求池 → GitHub Issue → 分诊 → 分析 → 执行 → Gate Review → Handback 的**完整入站流水线（A–F + Acceptance/Promote）**
 - **触发**: 飞书入站、feishu inbound pipeline、入站流水线、inbound 全流程
 - **创建日期**: 2026-05-26
 
@@ -217,6 +217,16 @@ Handback 时机：人工合入 dev 且 dev CI/CD success 之后。不打 `ready-
 | `review-changes-requested` | E | D | Gate 反馈 | E 打回，D 下一轮按 comment 修订 |
 | `execution-failed` | D | Human | 告警 | 执行或 PR 失败 |
 | `execution-exhausted` | D | Human | 停机 | 自动重试达上限（`pipeline_d.max_attempts` / `max_revision_rounds`），需人工运行 |
+
+**Pipeline C 失败推进**（engine v0.1.33+，config `pipeline_c`）：单条分析失败不得永久堵死队列。
+
+| 配置项 | 默认 | 含义 |
+|--------|------|------|
+| `batch` | 3 | 每轮 lead-tick / scan 最多分析条数（公平排序后截断） |
+| `max_attempts` | 2 | 连续分析失败次数；达上限进入软冷却 |
+| `cooldown_minutes` | 60 | 冷却期内跳过该 issue，冷却后自动再入队 |
+
+失败计数写在 `issue_scanner_state.json`（`analysis_failure_count` / `last_analysis_failed_at`）。排序：失败少的优先，同失败次数仍按 `createdAt` 新优先。`--force` / `request-reanalysis` 绕过冷却。比 D 的 `execution-exhausted` 更轻，默认不要求人工摘 label。
 
 **Pipeline D 重试上限**（engine v0.1.20+，config `pipeline_d`）：
 

@@ -28,12 +28,26 @@ v0.1.32 起 `accept pass` **不再**自动 `repository_dispatch`。改为 handof
 | head_sha | 必须存在于 **surface_repo**（禁止跨仓 central SHA） |
 | branch_mapping | `pipeline_f.promote.branch_mapping` 或 surfaces.yaml |
 | Surface label | 若 issue 有 surface label，须与裁决 surface 一致 |
+| **Migration serial** (#316) | changeset 含 `migrations/versions/*.py` 时，`down_revision` 祖先须已上 production；否则 fail-closed 并点名阻塞 issue |
 
 失败 → `⚠️ promote blocked` 评论 + @release_owner；**不** dispatch。
 
+### Migration 串行 vs 代码并行 (#316)
+
+- **migration-issue**：`down_revision` 祖先未上 production 且归属其他 issue → 阻塞，等祖先 promote 后自动通过
+- **code-only**：不受他人 pending migration 影响，保持并行 promote
+- accept 可并行；production merge 跟 Alembic / `dev` merge 顺序
+- **禁止**用累积 `dev → production` PR 解堵
+
 ---
 
-## 流程
+## Promote Plan 挡板（stopgap，#464 落地后删除）
+
+执行 promote 前先扫 issue comments 找 `## Promote Plan` 区块。存在 plan 的 issue：**禁止标准引擎 dispatch**，一切口径以 plan 的 YAML 为准（`status` / `file_set` / `carry_files` / `net_state_ref` / `prechecks` / `follow_up` 自描述，实例见 asp-backend #408/#449）。确认信号（`## Promote Plan Confirmation` + `/promote-plan confirm|fail`）只认**提需人（GitHub 负责人）**评论，agent 不得代发。根因（引擎单锚定 PR 丢多轮 revision 文件）与引擎层修复见 asp-backend #464。
+
+---
+
+## 流程（标准引擎路径）
 
 ```text
 accept pass → dev-accepted + ## Promote — Handoff + assign release_owner
@@ -43,6 +57,8 @@ accept pass → dev-accepted + ## Promote — Handoff + assign release_owner
 → release owner review / approve / merge prod PR
 → F prod handback
 ```
+
+> 无 Promote Plan 的 issue 才走本路径。
 
 ---
 

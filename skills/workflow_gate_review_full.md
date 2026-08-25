@@ -22,7 +22,7 @@
 
 ### 段 1：AI 门禁（合 dev 之前）
 
-D 已实现并开了 PR，尚未合 dev。E 用**与 D 不同的 Agent 平台**（如 D=OpenCode、E=Cursor）读 PR diff + Analysis，判断：
+D 已实现并开了 PR，尚未合 dev。E 用**与 D 不同的 Agent 平台**（如 D=Cursor、E=Claude Code；OpenCode 为 E fallback）读 PR diff + Analysis，判断：
 
 - **通过** → `review-dev-pass` + 自动 merge 关联 PR（`auto_merge: true` 时）+ AI 通过 comment + 飞书私信 lead
 - **打回** → 去 `executed` + `review-changes-requested` + `## Pipeline E Gate Review` comment，D 下一轮修订
